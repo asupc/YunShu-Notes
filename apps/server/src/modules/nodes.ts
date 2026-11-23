@@ -192,7 +192,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
   });
 
   const moveSchema = z.object({
-    newParentId: z.string().uuid().nullable(),
+    newParentId: z.string().min(1).nullable(),
     prevRank: z.string().nullable().optional(),
     nextRank: z.string().nullable().optional(),
   });

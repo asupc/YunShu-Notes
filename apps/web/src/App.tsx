@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Menu, PanelLeft, RefreshCw } from 'lucide-react';
 import { AuthScreen } from './components/AuthScreen';
 import { NoteEditor } from './components/NoteEditor';
+import { FolderGridView } from './components/FolderGridView';
 import { OfficePreview } from './components/OfficePreview';
 import { SearchModal } from './components/SearchModal';
 import { SidebarTree } from './components/SidebarTree';
@@ -236,6 +237,8 @@ export const App: React.FC = () => {
                   : '点击左上角菜单按钮或从屏幕左边缘向右滑动打开目录树。'}
               </p>
             </div>
+          ) : activeNode.nodeType === 'folder' ? (
+            <FolderGridView folder={activeNode} />
           ) : isOfficeFile ? (
             <OfficePreview node={activeNode} />
           ) : (

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Edit3, X } from 'lucide-react';
+import { AlertTriangle, Check, Edit3, Folder, FolderInput, X } from 'lucide-react';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -211,6 +211,143 @@ export const RenameDialog: React.FC<RenameDialogProps> = ({
           </button>
         </div>
       </form>
+    </div>
+  );
+};
+
+export interface MoveFolderOption {
+  id: string | null;
+  title: string;
+  depth: number;
+}
+
+interface MoveNodeDialogProps {
+  open: boolean;
+  nodeTitle: string;
+  currentParentId: string | null;
+  options: MoveFolderOption[];
+  onConfirm: (targetParentId: string | null) => void | Promise<void>;
+  onCancel: () => void;
+}
+
+export const MoveNodeDialog: React.FC<MoveNodeDialogProps> = ({
+  open,
+  nodeTitle,
+  currentParentId,
+  options,
+  onConfirm,
+  onCancel,
+}) => {
+  const [selectedId, setSelectedId] = useState<string | null>(currentParentId);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedId(currentParentId);
+  }, [open, currentParentId]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onCancel]);
+
+  if (!open) return null;
+
+  const handleConfirm = async () => {
+    if (selectedId === currentParentId) {
+      onCancel();
+      return;
+    }
+    setBusy(true);
+    try {
+      await onConfirm(selectedId);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-slate-950/55 backdrop-blur-[2px] flex items-center justify-center p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-sm rounded-xl bg-white dark:bg-neutral-950 border border-slate-200 dark:border-neutral-800 shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 pt-5 pb-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-2 min-w-0">
+              <FolderInput className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+                移动「{nodeTitle}」到目录
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={onCancel}
+              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            选择目标目录（也可以直接在左侧目录树中按住拖拽）
+          </p>
+        </div>
+
+        <div className="px-3 pb-3 max-h-64 overflow-y-auto space-y-0.5">
+          {options.map((opt) => {
+            const isSelected = selectedId === opt.id;
+            const isCurrent = currentParentId === opt.id;
+            return (
+              <button
+                key={opt.id ?? '__root__'}
+                type="button"
+                onClick={() => setSelectedId(opt.id)}
+                style={{ paddingLeft: `${opt.depth * 16 + 10}px` }}
+                className={`w-full flex items-center justify-between gap-2 pr-3 py-2 text-xs rounded-lg transition-colors text-left ${
+                  isSelected
+                    ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-semibold'
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-neutral-900'
+                }`}
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  <Folder className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <span className="truncate">{opt.title}</span>
+                  {isCurrent && (
+                    <span className="text-[10px] text-slate-400 shrink-0">（当前）</span>
+                  )}
+                </span>
+                {isSelected && <Check className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="px-5 py-3 bg-slate-50 dark:bg-neutral-950 border-t border-slate-100 dark:border-neutral-800 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onCancel}
+            className="px-3.5 py-1.5 text-xs font-medium rounded-md border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-neutral-800"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            disabled={busy || selectedId === currentParentId}
+            onClick={() => void handleConfirm()}
+            className="px-3.5 py-1.5 text-xs font-semibold rounded-md bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+          >
+            {busy ? '移动中...' : '确认移动'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

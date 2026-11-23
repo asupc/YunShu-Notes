@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -8,6 +8,7 @@ import {
   FileSpreadsheet,
   FileText,
   Folder,
+  FolderInput,
   FolderPlus,
   LogOut,
   Moon,
@@ -18,11 +19,11 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import type { NodeTreeItem, NodeType } from '@yunshu/shared';
+import type { NodeMeta, NodeTreeItem, NodeType } from '@yunshu/shared';
 import { api, sha256File } from '../lib/api';
 import { markdownToHtml } from '../lib/markdown';
 import { useAppStore } from '../store/useAppStore';
-import { ConfirmDialog, RenameDialog } from './AppDialog';
+import { ConfirmDialog, MoveNodeDialog, RenameDialog, type MoveFolderOption } from './AppDialog';
 
 function NodeIcon({ type }: { type: NodeType }) {
   switch (type) {
@@ -47,7 +48,20 @@ interface ContextMenuState {
   node: NodeTreeItem | null;
 }
 
-const NODE_DRAG_MIME = 'application/x-yunshu-node-id';
+interface PointerDragState {
+  sourceNode: NodeMeta;
+  x: number;
+  y: number;
+  /** 目标目录 ID；null 表示根目录；undefined 表示尚未悬停在有效投放区 */
+  targetParentId: string | null | undefined;
+  /** 高亮显示的节点 ID（悬停目录或其父目录） */
+  highlightNodeId: string | null;
+  /** 是否悬停在根目录投放区 */
+  highlightRoot: boolean;
+  /** 投放提示与合法性 */
+  targetLabel: string;
+  status: 'valid' | 'same' | 'invalid' | 'idle';
+}
 
 export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriendly = false }) => {
   const nodes = useAppStore((s) => s.nodes);
@@ -63,26 +77,32 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
   const setSearchOpen = useAppStore((s) => s.setSearchOpen);
   const setUser = useAppStore((s) => s.setUser);
 
-  const [dragNodeId, setDragNodeId] = useState<string | null>(null);
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
-  const [dropMode, setDropMode] = useState<'move' | 'upload' | null>(null);
-  const [rootDropActive, setRootDropActive] = useState(false);
+  // 内部节点拖拽（基于 Pointer Events，兼容 Windows WebView2 / 浏览器 / 安卓触控）
+  const [pointerDrag, setPointerDrag] = useState<PointerDragState | null>(null);
+  // 外部系统文件拖入上传状态（基于 HTML5 Drag & Drop）
+  const [fileDropNodeId, setFileDropNodeId] = useState<string | null>(null);
+  const [fileDropRoot, setFileDropRoot] = useState(false);
+
   const [uploading, setUploading] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
-  // 美化弹窗状态：重命名、删除确认、退出登录确认
+  // 美化弹窗状态：重命名、移动到目录、删除确认、退出登录确认
   const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
+  const [moveTarget, setMoveTarget] = useState<NodeMeta | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadParentRef = useRef<string | null>(null);
+  const treeScrollRef = useRef<HTMLDivElement>(null);
+  const justDraggedRef = useRef(false);
+  const autoExpandTimerRef = useRef<{ folderId: string; timer: number } | null>(null);
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
     window.setTimeout(() => setToastMsg((cur) => (cur === msg ? null : cur)), 2800);
-  };
+  }, []);
 
   // 智能目标目录：选中目录时在该目录下创建/上传；选中文档时在其所属目录下创建/上传
   const activeCreateTarget = useMemo(() => {
@@ -98,7 +118,23 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
     return { id: null as string | null, label: '根目录' };
   }, [nodes, activeNodeId]);
 
-  // 防止拖入文件时浏览器直接打开文件导致离开应用
+  const moveFolderOptions = useMemo<MoveFolderOption[]>(() => {
+    const opts: MoveFolderOption[] = [{ id: null, title: '根目录', depth: 0 }];
+    if (!moveTarget) return opts;
+    const walk = (items: NodeTreeItem[], depth: number) => {
+      for (const it of items) {
+        if (it.nodeType !== 'folder') continue;
+        // 禁止选择自身或自身子目录
+        if (it.id === moveTarget.id || it.path.startsWith(moveTarget.path)) continue;
+        opts.push({ id: it.id, title: it.title, depth });
+        if (it.children.length > 0) walk(it.children, depth + 1);
+      }
+    };
+    walk(tree, 1);
+    return opts;
+  }, [tree, moveTarget]);
+
+  // 防止拖入外部文件时浏览器直接打开文件导致离开应用
   useEffect(() => {
     const prevent = (e: DragEvent) => {
       if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes('Files')) {
@@ -148,6 +184,243 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
       window.removeEventListener('keydown', onKey);
     };
   }, [contextMenu]);
+
+  const executeMoveNode = useCallback(
+    async (sourceNode: NodeMeta, newParentId: string | null) => {
+      if (sourceNode.parentId === newParentId) return;
+      const allNodes = useAppStore.getState().nodes;
+      const targetFolder = newParentId ? allNodes.find((n) => n.id === newParentId) : null;
+      if (targetFolder && (targetFolder.id === sourceNode.id || targetFolder.path.startsWith(sourceNode.path))) {
+        showToast('不能将目录移动到自身或子目录下');
+        return;
+      }
+      try {
+        await api.moveNode(sourceNode.id, { newParentId });
+        if (newParentId && !useAppStore.getState().expandedIds[newParentId]) {
+          toggleExpand(newParentId);
+        }
+        await loadTree();
+        const targetName = targetFolder ? targetFolder.title : '根目录';
+        showToast(`已将「${sourceNode.title}」移动到「${targetName}」`);
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : '移动节点失败');
+      }
+    },
+    [loadTree, showToast, toggleExpand]
+  );
+
+  // 根据指针坐标解析当前悬停的投放目标（零闪烁、兼容 WebView2 / 触控）
+  const evaluateDropTarget = useCallback((sourceNode: NodeMeta, clientX: number, clientY: number): Omit<PointerDragState, 'sourceNode' | 'x' | 'y'> => {
+    const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    if (!el) {
+      return { targetParentId: undefined, highlightNodeId: null, highlightRoot: false, targetLabel: '拖到目标目录松开', status: 'idle' };
+    }
+
+    const allNodes = useAppStore.getState().nodes;
+
+    // 1. 悬停在顶部「移至根目录」浮层
+    if (el.closest('[data-drop-root="true"]')) {
+      if (sourceNode.parentId === null) {
+        return { targetParentId: null, highlightNodeId: null, highlightRoot: true, targetLabel: '已在根目录', status: 'same' };
+      }
+      return { targetParentId: null, highlightNodeId: null, highlightRoot: true, targetLabel: '移至「根目录」', status: 'valid' };
+    }
+
+    // 2. 悬停在某个目录树节点行上
+    const nodeRow = el.closest('[data-drop-node-id]') as HTMLElement | null;
+    if (nodeRow) {
+      const hoveredId = nodeRow.dataset.dropNodeId;
+      const hoveredNode = hoveredId ? allNodes.find((n) => n.id === hoveredId) : undefined;
+      if (hoveredNode) {
+        // 拖到目录上 -> 移入该目录；拖到文档/笔记上 -> 移入该文档/笔记所在的目录
+        const destParentId = hoveredNode.nodeType === 'folder' ? hoveredNode.id : hoveredNode.parentId;
+        const destFolder = destParentId ? allNodes.find((n) => n.id === destParentId) : null;
+
+        if (destFolder && (destFolder.id === sourceNode.id || destFolder.path.startsWith(sourceNode.path))) {
+          return {
+            targetParentId: destParentId,
+            highlightNodeId: destFolder.id,
+            highlightRoot: false,
+            targetLabel: '不能移动到自身或子目录',
+            status: 'invalid',
+          };
+        }
+
+        if (destParentId === sourceNode.parentId) {
+          return {
+            targetParentId: destParentId,
+            highlightNodeId: destFolder ? destFolder.id : null,
+            highlightRoot: destParentId === null,
+            targetLabel: destFolder ? `已在「${destFolder.title}」中` : '已在根目录',
+            status: 'same',
+          };
+        }
+
+        return {
+          targetParentId: destParentId,
+          highlightNodeId: destFolder ? destFolder.id : null,
+          highlightRoot: destParentId === null,
+          targetLabel: destFolder ? `移动到「${destFolder.title}」` : '移至「根目录」',
+          status: 'valid',
+        };
+      }
+    }
+
+    // 3. 悬停在目录树空白区域 -> 移至根目录
+    if (el.closest('[data-drop-tree-area="true"]')) {
+      if (sourceNode.parentId === null) {
+        return { targetParentId: null, highlightNodeId: null, highlightRoot: true, targetLabel: '已在根目录', status: 'same' };
+      }
+      return { targetParentId: null, highlightNodeId: null, highlightRoot: true, targetLabel: '移至「根目录」', status: 'valid' };
+    }
+
+    return { targetParentId: undefined, highlightNodeId: null, highlightRoot: false, targetLabel: '拖到左侧目录松开', status: 'idle' };
+  }, []);
+
+  const clearAutoExpandTimer = () => {
+    if (autoExpandTimerRef.current) {
+      window.clearTimeout(autoExpandTimerRef.current.timer);
+      autoExpandTimerRef.current = null;
+    }
+  };
+
+  // 启动内部节点指针拖拽（PC 鼠标移动 6px 即触发；触控长按 350ms 触发，不干扰列表滚动）
+  const startNodePointerDrag = (e: React.PointerEvent, item: NodeTreeItem) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('button')) return;
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const isTouch = e.pointerType === 'touch';
+    let active = false;
+    let latestState: PointerDragState | null = null;
+    let longPressTimer: number | null = null;
+
+    const activateDrag = (x: number, y: number) => {
+      if (active) return;
+      active = true;
+      document.body.style.userSelect = 'none';
+      const evalRes = evaluateDropTarget(item, x, y);
+      latestState = { sourceNode: item, x, y, ...evalRes };
+      setPointerDrag(latestState);
+    };
+
+    if (isTouch) {
+      longPressTimer = window.setTimeout(() => {
+        activateDrag(startX, startY);
+      }, 350);
+    }
+
+    const onPointerMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      const dist = Math.hypot(dx, dy);
+
+      if (!active) {
+        if (isTouch) {
+          // 触控在长按激活前发生明显滑动 -> 视为正常滚动，取消拖拽
+          if (dist > 8 && longPressTimer !== null) {
+            window.clearTimeout(longPressTimer);
+            longPressTimer = null;
+            cleanup();
+          }
+          return;
+        }
+        if (dist < 6) return;
+        activateDrag(ev.clientX, ev.clientY);
+      }
+
+      if (ev.cancelable) ev.preventDefault();
+
+      // 靠近目录树顶部/底部边缘时自动滚动
+      const scrollEl = treeScrollRef.current;
+      if (scrollEl) {
+        const rect = scrollEl.getBoundingClientRect();
+        if (ev.clientY < rect.top + 36) {
+          scrollEl.scrollTop -= 12;
+        } else if (ev.clientY > rect.bottom - 36) {
+          scrollEl.scrollTop += 12;
+        }
+      }
+
+      const evalRes = evaluateDropTarget(item, ev.clientX, ev.clientY);
+      latestState = { sourceNode: item, x: ev.clientX, y: ev.clientY, ...evalRes };
+      setPointerDrag(latestState);
+
+      // 悬停在折叠目录上 550ms 自动展开，方便直接拖入子目录
+      const targetFolderId = evalRes.highlightNodeId;
+      if (
+        targetFolderId &&
+        evalRes.status === 'valid' &&
+        !useAppStore.getState().expandedIds[targetFolderId]
+      ) {
+        if (autoExpandTimerRef.current?.folderId !== targetFolderId) {
+          clearAutoExpandTimer();
+          autoExpandTimerRef.current = {
+            folderId: targetFolderId,
+            timer: window.setTimeout(() => {
+              if (!useAppStore.getState().expandedIds[targetFolderId]) {
+                toggleExpand(targetFolderId);
+              }
+              autoExpandTimerRef.current = null;
+            }, 550),
+          };
+        }
+      } else {
+        clearAutoExpandTimer();
+      }
+    };
+
+    const cleanup = () => {
+      if (longPressTimer !== null) {
+        window.clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+      clearAutoExpandTimer();
+      document.body.style.userSelect = '';
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape' && active) {
+        cleanup();
+        setPointerDrag(null);
+      }
+    };
+
+    const onPointerCancel = () => {
+      cleanup();
+      setPointerDrag(null);
+    };
+
+    const onPointerUp = () => {
+      const finalDrag = latestState;
+      const wasActive = active;
+      cleanup();
+      setPointerDrag(null);
+
+      if (wasActive) {
+        justDraggedRef.current = true;
+        window.setTimeout(() => {
+          justDraggedRef.current = false;
+        }, 80);
+
+        if (finalDrag && finalDrag.status === 'valid' && finalDrag.targetParentId !== undefined) {
+          void executeMoveNode(finalDrag.sourceNode, finalDrag.targetParentId);
+        } else if (finalDrag && finalDrag.status === 'invalid') {
+          showToast('不能将目录移动到自身或子目录下');
+        }
+      }
+    };
+
+    window.addEventListener('pointermove', onPointerMove, { passive: false });
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    window.addEventListener('keydown', onKeyDown);
+  };
 
   const handleCreate = async (nodeType: NodeType, explicitParentId?: string | null) => {
     const parentId = explicitParentId !== undefined ? explicitParentId : activeCreateTarget.id;
@@ -271,59 +544,35 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
     await loadTree();
   };
 
-  const handleMoveToRoot = async (itemId: string) => {
-    await api.moveNode(itemId, { newParentId: null });
-    await loadTree();
+  const handleMoveToRoot = async (item: NodeMeta) => {
+    await executeMoveNode(item, null);
   };
 
   const isExternalFileDrag = (e: React.DragEvent): boolean =>
     Array.from(e.dataTransfer.types).includes('Files');
 
-  const handleDropOnNode = async (e: React.DragEvent, targetItem: NodeTreeItem) => {
+  const handleFileDropOnNode = async (e: React.DragEvent, targetItem: NodeTreeItem) => {
+    if (!isExternalFileDrag(e)) return;
     e.preventDefault();
     e.stopPropagation();
-    setDropTargetId(null);
-    setDropMode(null);
+    setFileDropNodeId(null);
+    setFileDropRoot(false);
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const uploadTargetId = targetItem.nodeType === 'folder' ? targetItem.id : targetItem.parentId;
       await uploadFilesToParent(e.dataTransfer.files, uploadTargetId);
-      return;
-    }
-
-    const sourceId = e.dataTransfer.getData(NODE_DRAG_MIME) || dragNodeId;
-    setDragNodeId(null);
-    if (!sourceId || sourceId === targetItem.id) return;
-
-    try {
-      await api.moveNode(sourceId, { newParentId: targetItem.id });
-      if (!expandedIds[targetItem.id]) toggleExpand(targetItem.id);
-      await loadTree();
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : '移动节点失败');
     }
   };
 
-  const handleDropOnRoot = async (e: React.DragEvent) => {
+  const handleFileDropOnRoot = async (e: React.DragEvent) => {
+    if (!isExternalFileDrag(e)) return;
     e.preventDefault();
     e.stopPropagation();
-    setRootDropActive(false);
-    setDropTargetId(null);
-    setDropMode(null);
+    setFileDropRoot(false);
+    setFileDropNodeId(null);
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       await uploadFilesToParent(e.dataTransfer.files, null);
-      return;
-    }
-
-    const sourceId = e.dataTransfer.getData(NODE_DRAG_MIME) || dragNodeId;
-    setDragNodeId(null);
-    if (!sourceId) return;
-    try {
-      await api.moveNode(sourceId, { newParentId: null });
-      await loadTree();
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : '移至根目录失败');
     }
   };
 
@@ -331,7 +580,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
     e.preventDefault();
     e.stopPropagation();
     const menuWidth = 192;
-    const menuHeight = node ? 256 : 190;
+    const menuHeight = node ? 290 : 190;
     const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8);
     const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8);
     setContextMenu({ x: Math.max(8, x), y: Math.max(8, y), node });
@@ -340,54 +589,53 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
   const renderItem = (item: NodeTreeItem, depth: number) => {
     const isExpanded = Boolean(expandedIds[item.id]);
     const isActive = activeNodeId === item.id;
-    const isDropTarget = dropTargetId === item.id;
+    const isDraggingSource = pointerDrag?.sourceNode.id === item.id;
+    const isMoveDropTarget = pointerDrag?.highlightNodeId === item.id;
+    const isMoveInvalid = isMoveDropTarget && pointerDrag?.status === 'invalid';
+    const isFileDropTarget = fileDropNodeId === item.id;
     const hasChildren = item.children.length > 0;
 
     return (
       <div key={item.id}>
         <div
-          draggable
-          onDragStart={(e) => {
-            setDragNodeId(item.id);
-            e.dataTransfer.setData(NODE_DRAG_MIME, item.id);
-            e.dataTransfer.effectAllowed = 'move';
-          }}
-          onDragEnd={() => {
-            setDragNodeId(null);
-            setDropTargetId(null);
-            setDropMode(null);
-            setRootDropActive(false);
-          }}
+          data-drop-node-id={item.id}
+          onPointerDown={(e) => startNodePointerDrag(e, item)}
           onDragOver={(e) => {
+            if (!isExternalFileDrag(e)) return;
             e.preventDefault();
             e.stopPropagation();
-            const isFile = isExternalFileDrag(e);
-            e.dataTransfer.dropEffect = isFile ? 'copy' : 'move';
-            setDropTargetId(item.id);
-            setDropMode(isFile ? 'upload' : 'move');
+            e.dataTransfer.dropEffect = 'copy';
+            setFileDropRoot(false);
+            setFileDropNodeId(item.id);
           }}
           onDragLeave={(e) => {
-            e.stopPropagation();
-            if (dropTargetId === item.id) {
-              setDropTargetId(null);
-              setDropMode(null);
+            if (!isExternalFileDrag(e)) return;
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+              setFileDropNodeId((cur) => (cur === item.id ? null : cur));
             }
           }}
-          onDrop={(e) => void handleDropOnNode(e, item)}
+          onDrop={(e) => void handleFileDropOnNode(e, item)}
           onContextMenu={(e) => openContextMenu(e, item)}
-          onClick={() => selectNode(item.id)}
+          onClick={() => {
+            if (justDraggedRef.current) return;
+            selectNode(item.id);
+          }}
           style={{ paddingLeft: `${depth * 16 + 10}px` }}
           className={`group relative flex items-center gap-1.5 ${
             touchFriendly ? 'py-2.5 text-sm' : 'py-1.5 text-[13.5px]'
           } pr-2 cursor-pointer rounded-md mx-1.5 select-none transition-colors overflow-hidden ${
+            isDraggingSource ? 'opacity-40' : ''
+          } ${
             isActive
               ? 'bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-200 font-semibold'
               : 'hover:bg-slate-200/60 dark:hover:bg-neutral-900 text-slate-700 dark:text-slate-300'
           } ${
-            isDropTarget
-              ? dropMode === 'upload'
-                ? 'ring-2 ring-emerald-500 bg-emerald-50 dark:bg-emerald-950/50'
-                : 'ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-950/50'
+            isFileDropTarget
+              ? 'ring-2 ring-emerald-500 bg-emerald-50 dark:bg-emerald-950/50'
+              : isMoveInvalid
+              ? 'ring-2 ring-red-500 bg-red-50 dark:bg-red-950/50'
+              : isMoveDropTarget
+              ? 'ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-950/50'
               : ''
           }`}
         >
@@ -415,52 +663,54 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           <span className="truncate flex-1 min-w-0">{item.title}</span>
           {item.isPinned && <Pin className="w-3 h-3 text-amber-500 shrink-0" />}
 
-          {/* 绝对定位悬浮操作栏：彻底消除悬停时挤占宽度的页面抖动 */}
-          <div
-            className={`absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 pl-3 pr-1 py-0.5 rounded-md transition-opacity ${
-              isActive
-                ? 'bg-blue-100/95 dark:bg-blue-900/95'
-                : 'bg-slate-200/95 dark:bg-neutral-900/95'
-            } ${
-              touchFriendly && isActive
-                ? 'opacity-100 pointer-events-auto'
-                : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
-            }`}
-          >
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleCreate('note', item.id);
-              }}
-              className="p-1 rounded hover:bg-slate-300/70 dark:hover:bg-neutral-800"
-              title="新建子笔记"
+          {/* 绝对定位悬浮操作栏：拖拽期间隐藏，彻底消除悬停抖动 */}
+          {!pointerDrag && (
+            <div
+              className={`absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 pl-3 pr-1 py-0.5 rounded-md transition-opacity ${
+                isActive
+                  ? 'bg-blue-100/95 dark:bg-blue-900/95'
+                  : 'bg-slate-200/95 dark:bg-neutral-900/95'
+              } ${
+                touchFriendly && isActive
+                  ? 'opacity-100 pointer-events-auto'
+                  : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
+              }`}
             >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                triggerUpload(item.id);
-              }}
-              className="p-1 rounded hover:bg-slate-300/70 dark:hover:bg-neutral-800"
-              title="上传文档到此节点下"
-            >
-              <Upload className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setDeleteTarget({ id: item.id, title: item.title });
-              }}
-              className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-950/60 text-slate-500 hover:text-red-600"
-              title="移至回收站"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleCreate('note', item.id);
+                }}
+                className="p-1 rounded hover:bg-slate-300/70 dark:hover:bg-neutral-800"
+                title="新建子笔记"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  triggerUpload(item.id);
+                }}
+                className="p-1 rounded hover:bg-slate-300/70 dark:hover:bg-neutral-800"
+                title="上传文档到此节点下"
+              >
+                <Upload className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setDeleteTarget({ id: item.id, title: item.title });
+                }}
+                className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-950/60 text-slate-500 hover:text-red-600"
+                title="移至回收站"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
 
         {isExpanded && item.children.length > 0 && (
@@ -548,54 +798,61 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         </div>
       )}
 
-      {dragNodeId && (
-        <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            setRootDropActive(true);
-          }}
-          onDragLeave={() => setRootDropActive(false)}
-          onDrop={(e) => void handleDropOnRoot(e)}
-          className={`mx-2 mt-2 py-1.5 px-2 text-center text-xs rounded-md border border-dashed transition-colors ${
-            rootDropActive
-              ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
-              : 'border-slate-300 text-slate-500 dark:border-neutral-800'
-          }`}
-        >
-          拖到此处移至根目录
-        </div>
-      )}
-
-      {/* 无限层级目录树（tree-scroll 防止滚动条出现时抖动） */}
-      <div
-        className={`flex-1 overflow-y-auto overflow-x-hidden py-2 tree-scroll ${
-          rootDropActive && !dragNodeId ? 'bg-emerald-50/50 dark:bg-emerald-950/20' : ''
-        }`}
-        onContextMenu={(e) => openContextMenu(e, null)}
-        onDragOver={(e) => {
-          e.preventDefault();
-          if (isExternalFileDrag(e)) {
-            e.dataTransfer.dropEffect = 'copy';
-            setRootDropActive(true);
-          }
-        }}
-        onDragLeave={() => setRootDropActive(false)}
-        onDrop={(e) => void handleDropOnRoot(e)}
-      >
-        {tree.length === 0 ? (
-          <div className="px-4 py-8 text-center text-xs text-slate-400 leading-relaxed">
-            还没有任何笔记或文档
-            <br />
-            点击上方按钮，或直接把文件拖入此处上传
+      {/* 无限层级目录树容器（relative 包裹，顶部根目录投放区采用浮层避免触发任何布局抖动） */}
+      <div className="relative flex-1 min-h-0 flex flex-col">
+        {pointerDrag && (
+          <div
+            data-drop-root="true"
+            className={`absolute inset-x-2 top-1.5 z-20 py-1.5 px-2 text-center text-xs font-medium rounded-md border border-dashed shadow-sm transition-colors ${
+              pointerDrag.highlightRoot
+                ? 'border-blue-500 bg-blue-50/95 text-blue-700 dark:bg-blue-950/90 dark:text-blue-300'
+                : 'border-slate-300 bg-white/90 text-slate-600 dark:border-neutral-700 dark:bg-neutral-950/90 dark:text-slate-300'
+            }`}
+          >
+            拖到此处移至根目录
           </div>
-        ) : (
-          tree.map((node) => renderItem(node, 0))
         )}
+
+        <div
+          ref={treeScrollRef}
+          data-drop-tree-area="true"
+          className={`flex-1 overflow-y-auto overflow-x-hidden py-2 tree-scroll ${
+            fileDropRoot
+              ? 'bg-emerald-50/50 dark:bg-emerald-950/20'
+              : pointerDrag?.highlightRoot && !pointerDrag.highlightNodeId
+              ? 'bg-blue-50/30 dark:bg-blue-950/20'
+              : ''
+          }`}
+          onContextMenu={(e) => openContextMenu(e, null)}
+          onDragOver={(e) => {
+            if (!isExternalFileDrag(e)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            setFileDropRoot(true);
+          }}
+          onDragLeave={(e) => {
+            if (!isExternalFileDrag(e)) return;
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+              setFileDropRoot(false);
+            }
+          }}
+          onDrop={(e) => void handleFileDropOnRoot(e)}
+        >
+          {tree.length === 0 ? (
+            <div className="px-4 py-8 text-center text-xs text-slate-400 leading-relaxed">
+              还没有任何笔记或文档
+              <br />
+              点击上方按钮，或直接把文件拖入此处上传
+            </div>
+          ) : (
+            tree.map((node) => renderItem(node, 0))
+          )}
+        </div>
       </div>
 
       {/* 底部工具栏 */}
       <div className="p-2.5 border-t border-slate-200 dark:border-neutral-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
-        <span className="text-[11px] text-slate-400">F2 重命名 · 拖入文件上传</span>
+        <span className="text-[11px] text-slate-400">拖拽改目录 · F2 重命名</span>
 
         <div className="flex items-center gap-1">
           <button
@@ -616,6 +873,29 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           </button>
         </div>
       </div>
+
+      {/* 跟随光标的拖拽预览浮标 */}
+      {pointerDrag && (
+        <div
+          style={{
+            left: `${Math.min(pointerDrag.x + 14, window.innerWidth - 220)}px`,
+            top: `${Math.min(pointerDrag.y + 14, window.innerHeight - 64)}px`,
+          }}
+          className={`fixed z-50 pointer-events-none max-w-[220px] px-2.5 py-1.5 rounded-lg shadow-xl border text-xs backdrop-blur-sm ${
+            pointerDrag.status === 'invalid'
+              ? 'bg-red-50/95 dark:bg-red-950/95 border-red-300 dark:border-red-800 text-red-700 dark:text-red-300'
+              : pointerDrag.status === 'valid'
+              ? 'bg-blue-50/95 dark:bg-blue-950/95 border-blue-300 dark:border-blue-700 text-blue-800 dark:text-blue-200'
+              : 'bg-white/95 dark:bg-neutral-900/95 border-slate-200 dark:border-neutral-700 text-slate-700 dark:text-slate-200'
+          }`}
+        >
+          <div className="flex items-center gap-1.5 font-medium truncate">
+            <NodeIcon type={pointerDrag.sourceNode.nodeType} />
+            <span className="truncate">{pointerDrag.sourceNode.title}</span>
+          </div>
+          <div className="text-[11px] opacity-80 mt-0.5 truncate">{pointerDrag.targetLabel}</div>
+        </div>
+      )}
 
       {/* PC 端右键上下文菜单 */}
       {contextMenu && (
@@ -683,6 +963,18 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                 onClick={() => {
                   const n = contextMenu.node!;
                   setContextMenu(null);
+                  setMoveTarget(n);
+                }}
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
+              >
+                <FolderInput className="w-3.5 h-3.5 text-blue-500" />
+                移动到目录...
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const n = contextMenu.node!;
+                  setContextMenu(null);
                   void handleTogglePin(n);
                 }}
                 className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
@@ -696,7 +988,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                   onClick={() => {
                     const n = contextMenu.node!;
                     setContextMenu(null);
-                    void handleMoveToRoot(n.id);
+                    void handleMoveToRoot(n);
                   }}
                   className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
                 >
@@ -788,6 +1080,20 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         onCancel={() => setRenameTarget(null)}
       />
 
+      <MoveNodeDialog
+        open={Boolean(moveTarget)}
+        nodeTitle={moveTarget?.title ?? ''}
+        currentParentId={moveTarget?.parentId ?? null}
+        options={moveFolderOptions}
+        onConfirm={async (targetParentId) => {
+          if (moveTarget) {
+            await executeMoveNode(moveTarget, targetParentId);
+          }
+          setMoveTarget(null);
+        }}
+        onCancel={() => setMoveTarget(null)}
+      />
+
       <ConfirmDialog
         open={Boolean(deleteTarget)}
         title="移至回收站"
@@ -801,12 +1107,12 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
       <ConfirmDialog
         open={logoutConfirmOpen}
         title="退出登录"
-        description="确定要退出当前账号吗？未同步的草稿建议先点击顶栏「手动同步」。"
-        confirmText="退出登录"
+        description="确定要退出当前账号吗？未同步的本地编辑内容可能会丢失。"
+        confirmText="确认退出"
         danger
         onConfirm={() => {
           setLogoutConfirmOpen(false);
-          setUser(null, null);
+          setUser(null);
         }}
         onCancel={() => setLogoutConfirmOpen(false)}
       />
