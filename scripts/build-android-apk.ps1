@@ -32,6 +32,13 @@
     国内网络默认使用镜像（腾讯云 Android SDK / Gradle、阿里云 Maven、
     npmmirror、rsproxy），失败时自动回退官方源；可用 -NoMirror 全部关闭。
 
+    release 包默认开启 APK 体积优化（关联 src-tauri/Cargo.toml 的 [profile.release]）：
+      - Rust 端 strip 符号表 + LTO + opt-level="s" + panic="abort"，
+        并裁剪 tokio / reqwest / zip 未使用的特性
+      - Gradle 端 useLegacyPackaging 压缩 APK 内的 .so（原生库约占包体 85%，
+        压缩后体积减半以上），语言资源只保留 zh / en
+      - 传 -NoSoCompress 可只关闭 .so 压缩（安装后占用更小、启动略快，但 APK 更大）
+
 .PARAMETER DebugBuild
     构建 debug APK（不递增版本号、不生成签名证书）。
 
@@ -47,6 +54,10 @@
 
 .PARAMETER NoMirror
     不使用国内镜像，全部走官方源。
+
+.PARAMETER NoSoCompress
+    不压缩 APK 内的 .so（默认压缩，APK 更小但安装时会解压到应用目录；
+    关闭后 APK 更大、安装后占用更小、启动略快）。
 
 .PARAMETER JdkImage
     JDK 容器镜像，默认 eclipse-temurin:17-jdk。
@@ -90,6 +101,7 @@ param(
     [switch]$RefreshDeps,
     [switch]$NewKeystore,
     [switch]$NoMirror,
+    [switch]$NoSoCompress,
     [string]$JdkImage = 'eclipse-temurin:17-jdk',
     [string]$TauriCliVersion = '2.12.6',
     [string]$AndroidTarget = 'aarch64',
@@ -139,6 +151,8 @@ $AbiName = @{ aarch64 = 'arm64-v8a'; armv7 = 'armeabi-v7a'; x86_64 = 'x86_64'; i
 $isDebug = [bool]$DebugBuild
 $isRelease = -not $isDebug
 $BuildKind = if ($isDebug) { 'debug' } else { 'release' }
+# 压缩 APK 内的 .so（useLegacyPackaging），可显著减小下载/传输体积
+$LegacyPackaging = if ($NoSoCompress) { '0' } else { '1' }
 
 function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }
 function Write-Warn([string]$Message) { Write-Host "警告：$Message" -ForegroundColor Yellow }
@@ -572,19 +586,20 @@ $containerScriptPath = Join-Path $stageDir 'build-container.sh'
 [System.IO.File]::WriteAllText($containerScriptPath, ($containerScript -replace "`r`n", "`n"), $Utf8NoBom)
 
 # ---------------------------------------------------------------------------
-# Android Gradle 补丁脚本：注入 release 签名 + Maven 镜像
+# Android Gradle 补丁脚本：注入 release 签名 + APK 体积优化 + Maven 镜像
 # ---------------------------------------------------------------------------
 $patchScript = @'
 const fs = require('fs');
 
 function patchAppGradle(file) {
     let src = fs.readFileSync(file, 'utf8');
-    if (src.indexOf('yunshuSigningApplied') !== -1) return;
     if (src.indexOf('\nandroid {') === -1) {
         console.error('错误：未找到 android 代码块：' + file);
         process.exit(1);
     }
 
+    // ---- release 签名 ----
+    if (src.indexOf('yunshuSigningApplied') === -1) {
     const decl = [
         '',
         '// yunshuSigningApplied: 由构建脚本注入的 release 签名配置',
@@ -626,8 +641,42 @@ function patchAppGradle(file) {
                 '            }';
     src = src.slice(0, insertAt) + rel + src.slice(insertAt);
 
+        console.log('==> 已注入 release 签名配置：' + file);
+    }
+
+    // ---- APK 体积优化 ----
+    if (src.indexOf('yunshuSizeOptimized') === -1) {
+        // Tauri 默认把 .so 不压缩地放进 APK（minSdk>=23 且未设 useLegacyPackaging）。
+        // 原生库约占包体 85%，压缩后传输体积可减半以上；代价是安装时解压到应用目录。
+        // 用 -NoSoCompress 可跳过这一步。
+        if (process.env.LEGACY_PACKAGING === '1' &&
+            src.indexOf('useLegacyPackaging = true') === -1) {
+            const packaging = [
+                '',
+                '    // yunshuSizeOptimized: 压缩 APK 内的原生库',
+                '    packaging {',
+                '        jniLibs {',
+                '            useLegacyPackaging = true',
+                '        }',
+                '    }'
+            ].join('\n');
+            src = src.replace('\nandroid {', '\nandroid {' + packaging);
+        }
+
+        // appcompat / material / webkit 等依赖自带几十套本地化资源，
+        // 应用界面固定为中文，只保留中英文资源即可。
+        if (src.indexOf('resourceConfigurations') === -1 &&
+            src.indexOf('defaultConfig {') !== -1) {
+            src = src.replace('defaultConfig {',
+                'defaultConfig {\n' +
+                '        // yunshuSizeOptimized: 只保留中英文资源\n' +
+                '        resourceConfigurations += listOf("zh", "en")');
+        }
+
+        console.log('==> 已注入 APK 体积优化配置：' + file);
+    }
+
     fs.writeFileSync(file, src);
-    console.log('==> 已注入 release 签名配置：' + file);
 }
 
 function patchRootGradle(file) {
@@ -689,6 +738,7 @@ $dockerArgs += @(
     '-e', "SDK_TEST_BASE_URL=$SdkMirror",
     '-e', "GRADLE_DIST_MIRROR=$GradleDistMirror",
     '-e', "MAVEN_MIRROR=$MavenMirror",
+    '-e', "LEGACY_PACKAGING=$LegacyPackaging",
     '-e', "KEYSTORE_ALIAS=$KeystoreAlias",
     '-e', "KEYSTORE_PASSWORD=$KeystorePassword",
     '-e', "KEYSTORE_FILE_NAME=$KeystoreFileName",
