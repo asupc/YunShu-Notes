@@ -33,3 +33,14 @@
 ```powershell
 docker compose -f deploy/docker-compose.yml up -d
 ```
+
+## 飞牛 NAS 一键部署
+
+开发机仓库根执行（需 Docker Desktop 与飞牛 SSH 免密）：
+
+```bash
+./scripts/deploy-fnos.sh          # 备份库 → 本机构建镜像/前端 → 推送飞牛 → 重建 → 健康检查 → 清理
+./scripts/deploy-fnos.sh --check  # 只预检
+```
+
+详见 [deploy/nas/README.md](deploy/nas/README.md)。
