@@ -18,6 +18,10 @@
 
 ## 一键构建 Windows PC 与 Android APK
 
+> 客户端首次启动时，在登录页的「服务端地址」中填写自建服务端，例如
+> `https://note.678120.cn:8888`（手机端请使用 `https://` 域名），点击「测试连接」通过后即可登录。
+> 地址保存在客户端本地；需要更换时先退出登录再修改。
+
 - **构建 Windows `.exe` / `.msi` 安装包**：安装 [Rust](https://rustup.rs/) 后双击 `scripts/build-windows-pc.bat`
 - **构建 Android `.apk` 安装包**：安装 Rust 与 Android Studio（配置 `ANDROID_HOME` 和 `NDK_HOME`）后双击 `scripts/build-android-apk.bat`
 
