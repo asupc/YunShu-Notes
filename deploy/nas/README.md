@@ -72,6 +72,9 @@
 - `server_name note.678120.cn; listen 8888 ssl;`，证书为通配符 `*.678120.cn`。
 - `root /usr/share/nginx/html/notes;` + `try_files $uri $uri/ /index.html;` 服务 SPA。
 - `location /api/ { proxy_pass http://127.0.0.1:3001; }` 反代 Fastify（含签名上传/下载 `/api/v1/files/blob`）。
+- `location /api/` 内显式设置 `Content-Security-Policy: frame-ancestors ...`，允许桌面端（页面源
+  `http://tauri.localhost`）/ 移动端 WebView 内嵌 PDF 预览；不要在该 location 继承 server 级
+  `X-Frame-Options: SAMEORIGIN`，否则打开 Word/Excel 文档时会提示「note.678120.cn 拒绝连接」。
 - 修改 `nginx.conf` 后先 `docker exec nginx nginx -t`，再 `nginx -s reload`。
 
 ## 内网 DNS（split DNS）
