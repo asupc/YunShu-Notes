@@ -22,7 +22,10 @@
 > `https://note.678120.cn:8888`（手机端请使用 `https://` 域名），点击「测试连接」通过后即可登录。
 > 地址保存在客户端本地；需要更换时先退出登录再修改。
 
-- **构建 Windows `.exe` / `.msi` 安装包**：安装 [Rust](https://rustup.rs/) 后双击 `scripts/build-windows-pc.bat`
+- **构建 Windows 客户端**：安装 [Rust](https://rustup.rs/) 后双击 `scripts/build-windows-pc.bat`
+  - 产出单文件 exe，并打包为绿色版 `YunShu-Notes_v<版本>_x64.zip`（附 `.sha256`）
+  - 默认发布到 `\\192.168.1.71\code`（可用 `-ReleaseOut` 修改，共享不可达时保留在 `apps/tauri-app/dist/windows/`）；`-NoPackage` 可只出 exe，`-NoInstall` 可跳过 npm install
+  - exe 默认开启体积优化（Cargo release profile：strip / LTO / `opt-level="z"` / `panic="abort"`，参照 terminal-buddy 的发布配置）
 - **构建 Android `.apk` 安装包**：安装并启动 [Docker Desktop](https://www.docker.com/products/docker-desktop/) 后双击 `scripts/build-android-apk.bat`
   - 无需在宿主机安装 Rust、JDK、Android Studio / SDK / NDK，全部在 `eclipse-temurin:17-jdk` 容器内构建
   - 默认产出**已签名 release APK**：首次运行自动生成自签名证书（`apps/tauri-app/keystore/`，已 gitignore，请自行备份），版本号每次构建自动 +1；构建成功后 APK 自动移动到 `\\192.168.1.71\code`（可用 `-ReleaseOut` 修改，共享不可达时保留在 `apps/tauri-app/dist/android/`）
