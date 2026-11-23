@@ -1,6 +1,6 @@
 [package]
 name = "yunshu-desktop"
-version = "1.0.0"
+version = "1.0.1"
 description = "云树笔记 Windows / macOS / Linux / Android 跨端客户端"
 edition = "2021"
 
@@ -17,7 +17,8 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
+# Android 交叉编译没有系统 OpenSSL，统一使用 rustls（桌面端同样可用）
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 sha2 = "0.10"
 hex = "0.4"
 notify = "6"
