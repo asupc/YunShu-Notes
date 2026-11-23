@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Clock, Download, ExternalLink, RefreshCw, RotateCcw, Upload } from 'lucide-react';
 import type { FileAccessUrls, NodeFileVersion, NodeMeta } from '@yunshu/shared';
-import { api, isTauriRuntime, sha256File, tauriInvoke } from '../lib/api';
+import { api, getApiBase, isTauriRuntime, sha256File, tauriInvoke } from '../lib/api';
 import { useAppStore } from '../store/useAppStore';
 
 interface Props {
@@ -52,7 +52,7 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
         downloadUrl: fileInfo.downloadUrl,
         sha256: fileInfo.sha256,
         baseVersion: fileInfo.version,
-        apiBase: import.meta.env.VITE_API_BASE || 'http://127.0.0.1:3001',
+        apiBase: getApiBase() || 'http://127.0.0.1:3001',
         authToken: localStorage.getItem('yunshu_token') || '',
       });
       setMessage('已调用本机 Office 打开文件。修改后按 Ctrl+S 保存，桌面端将自动回传新版本。');
