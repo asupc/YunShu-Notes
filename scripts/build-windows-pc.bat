@@ -21,13 +21,13 @@ if errorlevel 1 (
 )
 
 cd apps\tauri-app
-call tauri build
+call tauri build --no-bundle
 if errorlevel 1 goto :err
 
 echo.
-echo 打包成功！Windows 安装包目录：
-echo %cd%\src-tauri\target\release\bundle
-explorer "%cd%\src-tauri\target\release\bundle"
+echo 打包成功！可执行文件：
+echo %cd%\src-tauri\target\release\yunshu-desktop.exe
+explorer "%cd%\src-tauri\target\release"
 pause
 exit /b 0
 
