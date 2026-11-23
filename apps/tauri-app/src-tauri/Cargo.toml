@@ -1,6 +1,6 @@
 [package]
 name = "yunshu-desktop"
-version = "1.0.1"
+version = "1.0.2"
 description = "云树笔记 Windows / macOS / Linux / Android 跨端客户端"
 edition = "2021"
 
