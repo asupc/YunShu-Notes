@@ -5,6 +5,9 @@ target/
 *.tsbuildinfo
 apps/tauri-app/src-tauri/gen/
 
+# Android 构建脚本自动生成的 release 签名证书与密码，请自行备份
+apps/tauri-app/keystore/
+
 # 运行时数据（SQLite 数据库、上传文件）
 data/
 
