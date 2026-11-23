@@ -12,4 +12,6 @@ export const config = {
   filesDir: path.join(dataDir, 'files'),
   previewsDir: path.join(dataDir, 'previews'),
   jwtSecret: process.env.JWT_SECRET ?? 'yunshu-dev-jwt-secret-change-me',
+  // 注册入口默认关闭；需要新增账号时临时设为 true 并重启容器
+  allowRegistration: process.env.ALLOW_REGISTRATION === 'true',
 };

@@ -34,10 +34,27 @@ body,
   font-family: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', -apple-system, sans-serif;
 }
 
-/* Tiptap 编辑器排版样式 */
+.safe-area-shell {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Tiptap 编辑器排版样式：占满整个剩余编辑区域 */
 .ProseMirror {
   outline: none;
-  min-height: 60vh;
+  flex: 1;
+  width: 100%;
+  min-height: 100%;
   line-height: 1.75;
   font-size: 15px;
 }
@@ -83,5 +100,35 @@ body,
   content: attr(data-placeholder);
   float: left;
   height: 0;
+  pointer-events: none;
+}
+
+/* Markdown 表格编辑与展示样式 */
+.ProseMirror table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+  table-layout: fixed;
+  overflow: hidden;
+}
+.ProseMirror td,
+.ProseMirror th {
+  border: 1px solid var(--border-subtle);
+  padding: 0.5rem 0.75rem;
+  vertical-align: top;
+  min-width: 80px;
+  position: relative;
+}
+.ProseMirror th {
+  font-weight: 600;
+  text-align: left;
+  background-color: var(--bg-sidebar);
+}
+.ProseMirror .selectedCell:after {
+  z-index: 2;
+  position: absolute;
+  content: '';
+  inset: 0;
+  background: rgba(37, 99, 235, 0.12);
   pointer-events: none;
 }

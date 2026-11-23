@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { config } from '../config';
 import { db } from '../db';
 
 function hashPassword(password: string): string {
@@ -48,6 +49,9 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post('/api/v1/auth/register', async (req, reply) => {
+    if (!config.allowRegistration) {
+      return reply.code(403).send({ error: '注册入口已关闭，请联系管理员开通账号' });
+    }
     const parsed = registerSchema.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? '参数错误' });

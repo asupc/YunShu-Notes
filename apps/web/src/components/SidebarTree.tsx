@@ -1,8 +1,9 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
-  Download,
+  CornerLeftUp,
+  Edit3,
   FileCode2,
   FileSpreadsheet,
   FileText,
@@ -10,6 +11,7 @@ import {
   FolderPlus,
   LogOut,
   Moon,
+  Pin,
   Plus,
   Search,
   Sun,
@@ -18,6 +20,7 @@ import {
 } from 'lucide-react';
 import type { NodeTreeItem, NodeType } from '@yunshu/shared';
 import { api, sha256File } from '../lib/api';
+import { markdownToHtml } from '../lib/markdown';
 import { useAppStore } from '../store/useAppStore';
 
 function NodeIcon({ type }: { type: NodeType }) {
@@ -37,26 +40,68 @@ function NodeIcon({ type }: { type: NodeType }) {
   }
 }
 
-export const SidebarTree: React.FC = () => {
+interface ContextMenuState {
+  x: number;
+  y: number;
+  node: NodeTreeItem | null; // null 表示空白区根目录右键菜单
+}
+
+const NODE_DRAG_MIME = 'application/x-yunshu-node-id';
+
+export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriendly = false }) => {
+  const nodes = useAppStore((s) => s.nodes);
   const tree = useAppStore((s) => s.tree);
   const activeNodeId = useAppStore((s) => s.activeNodeId);
   const expandedIds = useAppStore((s) => s.expandedIds);
   const theme = useAppStore((s) => s.theme);
   const selectNode = useAppStore((s) => s.selectNode);
   const toggleExpand = useAppStore((s) => s.toggleExpand);
+  const setAllExpanded = useAppStore((s) => s.setAllExpanded);
   const loadTree = useAppStore((s) => s.loadTree);
   const setTheme = useAppStore((s) => s.setTheme);
   const setSearchOpen = useAppStore((s) => s.setSearchOpen);
-  const setMigrationOpen = useAppStore((s) => s.setMigrationOpen);
   const setUser = useAppStore((s) => s.setUser);
 
-  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragNodeId, setDragNodeId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [dropMode, setDropMode] = useState<'move' | 'upload' | null>(null);
+  const [rootDropActive, setRootDropActive] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadParentRef = useRef<string | null>(null);
 
-  const handleCreate = async (nodeType: NodeType, parentId: string | null = null) => {
+  // 智能目标目录：选中目录时在该目录下创建/上传；选中文档时在其所属目录下创建/上传
+  const activeCreateTarget = useMemo(() => {
+    const active = nodes.find((n) => n.id === activeNodeId);
+    if (!active) return { id: null as string | null, label: '根目录' };
+    if (active.nodeType === 'folder') {
+      return { id: active.id, label: active.title };
+    }
+    if (active.parentId) {
+      const parent = nodes.find((n) => n.id === active.parentId);
+      if (parent) return { id: parent.id, label: parent.title };
+    }
+    return { id: null as string | null, label: '根目录' };
+  }, [nodes, activeNodeId]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setContextMenu(null);
+    };
+    window.addEventListener('click', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [contextMenu]);
+
+  const handleCreate = async (nodeType: NodeType, explicitParentId?: string | null) => {
+    const parentId = explicitParentId !== undefined ? explicitParentId : activeCreateTarget.id;
     const defaultTitle =
       nodeType === 'folder' ? '新建目录' : nodeType === 'markdown' ? '未命名 Markdown' : '未命名笔记';
     const res = await api.createNode({ parentId, title: defaultTitle, nodeType });
@@ -65,27 +110,18 @@ export const SidebarTree: React.FC = () => {
     selectNode(res.node.id);
   };
 
-  const triggerUpload = (parentId: string | null = null) => {
-    uploadParentRef.current = parentId;
-    fileInputRef.current?.click();
-  };
-
-  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  const uploadFilesToParent = async (files: FileList | File[], parentId: string | null) => {
+    const list = Array.from(files);
+    if (list.length === 0) return;
     setUploading(true);
     try {
-      for (const file of Array.from(files)) {
+      for (const file of list) {
         const lower = file.name.toLowerCase();
-        const parentId = uploadParentRef.current;
 
-        // Markdown 文件直接导入为原生可编辑节点
+        // Markdown 文件支持含表格的双向解析后直接导入为原生节点
         if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
           const text = await file.text();
-          const html = text
-            .split('\n')
-            .map((line) => (line.trim() ? `<p>${line.replace(/</g, '&lt;')}</p>` : '<p></p>'))
-            .join('');
+          const html = markdownToHtml(text);
           const created = await api.createNode({
             parentId,
             title: file.name.replace(/\.(md|markdown)$/i, ''),
@@ -94,15 +130,17 @@ export const SidebarTree: React.FC = () => {
             plainText: text,
           });
           await loadTree();
+          if (parentId && !expandedIds[parentId]) toggleExpand(parentId);
           selectNode(created.node.id);
           continue;
         }
 
-        const nodeType: NodeType = lower.endsWith('.xlsx') || lower.endsWith('.xls')
-          ? 'xlsx'
-          : lower.endsWith('.pdf')
-          ? 'pdf'
-          : 'docx';
+        const nodeType: NodeType =
+          lower.endsWith('.xlsx') || lower.endsWith('.xls')
+            ? 'xlsx'
+            : lower.endsWith('.pdf')
+            ? 'pdf'
+            : 'docx';
 
         const created = await api.createNode({
           parentId,
@@ -136,42 +174,122 @@ export const SidebarTree: React.FC = () => {
           mimeType,
           fileSize: file.size,
           sha256: hash,
-          deviceName: 'Web 浏览器',
+          deviceName: '桌面/Web 端',
         });
 
         await loadTree();
+        if (parentId && !expandedIds[parentId]) toggleExpand(parentId);
         selectNode(created.node.id);
       }
     } catch (err) {
       alert(err instanceof Error ? err.message : '上传文件失败');
     } finally {
       setUploading(false);
-      e.target.value = '';
     }
   };
 
-  const handleDelete = async (e: React.MouseEvent, id: string, title: string) => {
-    e.stopPropagation();
+  const triggerUpload = (explicitParentId?: string | null) => {
+    uploadParentRef.current = explicitParentId !== undefined ? explicitParentId : activeCreateTarget.id;
+    fileInputRef.current?.click();
+  };
+
+  const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      await uploadFilesToParent(e.target.files, uploadParentRef.current);
+    }
+    e.target.value = '';
+  };
+
+  const handleRename = async (item: NodeTreeItem) => {
+    const nextTitle = window.prompt('请输入新的名称：', item.title);
+    if (!nextTitle || !nextTitle.trim() || nextTitle.trim() === item.title) return;
+    await api.updateNode(item.id, { title: nextTitle.trim() });
+    await loadTree();
+  };
+
+  const handleTogglePin = async (item: NodeTreeItem) => {
+    await api.updateNode(item.id, { isPinned: !item.isPinned });
+    await loadTree();
+  };
+
+  const handleMoveToRoot = async (itemId: string) => {
+    await api.moveNode(itemId, { newParentId: null });
+    await loadTree();
+  };
+
+  const handleDelete = async (id: string, title: string) => {
     if (!window.confirm(`确定将「${title}」及其子项移入回收站吗？`)) return;
     await api.deleteNode(id);
     if (activeNodeId === id) selectNode(null);
     await loadTree();
   };
 
-  const handleDropOnNode = async (e: React.DragEvent, targetId: string) => {
+  const handleLogout = () => {
+    if (!window.confirm('确定要退出当前账号吗？')) return;
+    setUser(null, null);
+  };
+
+  const isExternalFileDrag = (e: React.DragEvent): boolean =>
+    Array.from(e.dataTransfer.types).includes('Files');
+
+  const handleDropOnNode = async (e: React.DragEvent, targetItem: NodeTreeItem) => {
     e.preventDefault();
     e.stopPropagation();
     setDropTargetId(null);
-    if (!dragId || dragId === targetId) return;
+    setDropMode(null);
+
+    // 1. 外部文件拖拽上传：拖到哪个子目录就上传到哪个子目录（拖到普通文档则上传到其所在目录）
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const uploadTargetId = targetItem.nodeType === 'folder' ? targetItem.id : targetItem.parentId;
+      await uploadFilesToParent(e.dataTransfer.files, uploadTargetId);
+      return;
+    }
+
+    // 2. 内部节点拖拽修改上级目录（支持笔记、Markdown、Word、Excel、目录）
+    const sourceId = e.dataTransfer.getData(NODE_DRAG_MIME) || dragNodeId;
+    setDragNodeId(null);
+    if (!sourceId || sourceId === targetItem.id) return;
+
     try {
-      await api.moveNode(dragId, { newParentId: targetId });
-      if (!expandedIds[targetId]) toggleExpand(targetId);
+      await api.moveNode(sourceId, { newParentId: targetItem.id });
+      if (!expandedIds[targetItem.id]) toggleExpand(targetItem.id);
       await loadTree();
     } catch (err) {
       alert(err instanceof Error ? err.message : '移动节点失败');
-    } finally {
-      setDragId(null);
     }
+  };
+
+  const handleDropOnRoot = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setRootDropActive(false);
+    setDropTargetId(null);
+    setDropMode(null);
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      await uploadFilesToParent(e.dataTransfer.files, null);
+      return;
+    }
+
+    const sourceId = e.dataTransfer.getData(NODE_DRAG_MIME) || dragNodeId;
+    setDragNodeId(null);
+    if (!sourceId) return;
+    try {
+      await api.moveNode(sourceId, { newParentId: null });
+      await loadTree();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '移至根目录失败');
+    }
+  };
+
+  const openContextMenu = (e: React.MouseEvent, node: NodeTreeItem | null) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const menuWidth = 188;
+    const menuHeight = node ? 250 : 185;
+    const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8);
+    const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8);
+    setContextMenu({ x: Math.max(8, x), y: Math.max(8, y), node });
   };
 
   const renderItem = (item: NodeTreeItem, depth: number) => {
@@ -184,20 +302,49 @@ export const SidebarTree: React.FC = () => {
       <div key={item.id}>
         <div
           draggable
-          onDragStart={() => setDragId(item.id)}
+          onDragStart={(e) => {
+            setDragNodeId(item.id);
+            e.dataTransfer.setData(NODE_DRAG_MIME, item.id);
+            e.dataTransfer.effectAllowed = 'move';
+          }}
+          onDragEnd={() => {
+            setDragNodeId(null);
+            setDropTargetId(null);
+            setDropMode(null);
+            setRootDropActive(false);
+          }}
           onDragOver={(e) => {
             e.preventDefault();
+            e.stopPropagation();
+            const isFile = isExternalFileDrag(e);
+            e.dataTransfer.dropEffect = isFile ? 'copy' : 'move';
             setDropTargetId(item.id);
+            setDropMode(isFile ? 'upload' : 'move');
           }}
-          onDragLeave={() => setDropTargetId(null)}
-          onDrop={(e) => handleDropOnNode(e, item.id)}
+          onDragLeave={(e) => {
+            e.stopPropagation();
+            if (dropTargetId === item.id) {
+              setDropTargetId(null);
+              setDropMode(null);
+            }
+          }}
+          onDrop={(e) => void handleDropOnNode(e, item)}
+          onContextMenu={(e) => openContextMenu(e, item)}
           onClick={() => selectNode(item.id)}
           style={{ paddingLeft: `${depth * 16 + 10}px` }}
-          className={`group flex items-center gap-1.5 py-1.5 pr-2 text-[13.5px] cursor-pointer rounded-md mx-1.5 select-none transition-colors ${
+          className={`group flex items-center gap-1.5 ${
+            touchFriendly ? 'py-2.5 text-sm' : 'py-1.5 text-[13.5px]'
+          } pr-2 cursor-pointer rounded-md mx-1.5 select-none transition-colors ${
             isActive
               ? 'bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-200 font-semibold'
               : 'hover:bg-slate-200/60 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
-          } ${isDropTarget ? 'ring-2 ring-blue-500' : ''}`}
+          } ${
+            isDropTarget
+              ? dropMode === 'upload'
+                ? 'ring-2 ring-emerald-500 bg-emerald-50 dark:bg-emerald-950/50'
+                : 'ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-950/50'
+              : ''
+          }`}
         >
           <button
             type="button"
@@ -221,8 +368,13 @@ export const SidebarTree: React.FC = () => {
 
           <NodeIcon type={item.nodeType} />
           <span className="truncate flex-1">{item.title}</span>
+          {item.isPinned && <Pin className="w-3 h-3 text-amber-500 shrink-0" />}
 
-          <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
+          <div
+            className={`${
+              touchFriendly && isActive ? 'flex' : 'hidden group-hover:flex'
+            } items-center gap-0.5 shrink-0`}
+          >
             <button
               type="button"
               onClick={(e) => {
@@ -247,7 +399,10 @@ export const SidebarTree: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={(e) => handleDelete(e, item.id, item.title)}
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleDelete(item.id, item.title);
+              }}
               className="p-0.5 rounded hover:bg-red-100 text-slate-400 hover:text-red-600"
               title="移至回收站"
             >
@@ -264,7 +419,7 @@ export const SidebarTree: React.FC = () => {
   };
 
   return (
-    <aside className="w-[264px] shrink-0 h-full flex flex-col border-r border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+    <aside className="w-full h-full flex flex-col border-r border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
       <input
         ref={fileInputRef}
         type="file"
@@ -274,7 +429,7 @@ export const SidebarTree: React.FC = () => {
         className="hidden"
       />
 
-      {/* 顶部搜索入口 */}
+      {/* 顶部搜索与新建操作区 */}
       <div className="p-3 space-y-2 border-b border-slate-200 dark:border-slate-800">
         <button
           type="button"
@@ -291,16 +446,18 @@ export const SidebarTree: React.FC = () => {
         <div className="grid grid-cols-3 gap-1.5">
           <button
             type="button"
-            onClick={() => handleCreate('note', null)}
+            onClick={() => void handleCreate('note')}
             className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-blue-600 hover:bg-blue-700 text-white"
+            title={`在「${activeCreateTarget.label}」下新建笔记`}
           >
             <Plus className="w-3.5 h-3.5" />
             笔记
           </button>
           <button
             type="button"
-            onClick={() => handleCreate('folder', null)}
+            onClick={() => void handleCreate('folder')}
             className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100"
+            title={`在「${activeCreateTarget.label}」下新建子目录`}
           >
             <FolderPlus className="w-3.5 h-3.5" />
             目录
@@ -308,45 +465,81 @@ export const SidebarTree: React.FC = () => {
           <button
             type="button"
             disabled={uploading}
-            onClick={() => triggerUpload(null)}
+            onClick={() => triggerUpload()}
             className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 disabled:opacity-50"
+            title={`上传文档到「${activeCreateTarget.label}」`}
           >
             <Upload className="w-3.5 h-3.5" />
             {uploading ? '上传中' : '上传'}
           </button>
         </div>
+
+        {/* 显示当前新建/上传的目标位置 */}
+        <div className="flex items-center justify-between text-[11px] text-slate-500 px-0.5">
+          <span className="truncate">
+            新建位置：<strong className="text-slate-700 dark:text-slate-300">{activeCreateTarget.label}</strong>
+          </span>
+          {activeCreateTarget.id && (
+            <button
+              type="button"
+              onClick={() => selectNode(null)}
+              className="text-blue-600 hover:underline shrink-0 ml-1"
+            >
+              回到根目录
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* 无限层级目录树 */}
+      {/* 拖拽节点时显示「移至根目录」快捷接收区 */}
+      {dragNodeId && (
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setRootDropActive(true);
+          }}
+          onDragLeave={() => setRootDropActive(false)}
+          onDrop={(e) => void handleDropOnRoot(e)}
+          className={`mx-2 mt-2 py-1.5 px-2 text-center text-xs rounded-md border border-dashed transition-colors ${
+            rootDropActive
+              ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
+              : 'border-slate-300 text-slate-500 dark:border-slate-700'
+          }`}
+        >
+          拖到此处移至根目录
+        </div>
+      )}
+
+      {/* 无限层级目录树（支持右键菜单、外部文件拖入上传、内部节点拖拽换父级） */}
       <div
-        className="flex-1 overflow-y-auto py-2"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={async () => {
-          if (!dragId) return;
-          await api.moveNode(dragId, { newParentId: null });
-          setDragId(null);
-          await loadTree();
+        className={`flex-1 overflow-y-auto py-2 ${
+          rootDropActive && !dragNodeId ? 'bg-emerald-50/50 dark:bg-emerald-950/20' : ''
+        }`}
+        onContextMenu={(e) => openContextMenu(e, null)}
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (isExternalFileDrag(e)) {
+            e.dataTransfer.dropEffect = 'copy';
+            setRootDropActive(true);
+          }
         }}
+        onDragLeave={() => setRootDropActive(false)}
+        onDrop={(e) => void handleDropOnRoot(e)}
       >
         {tree.length === 0 ? (
-          <div className="px-4 py-8 text-center text-xs text-slate-400">
-            还没有任何笔记，点击上方「笔记」或「上传」开始构建你的目录树
+          <div className="px-4 py-8 text-center text-xs text-slate-400 leading-relaxed">
+            还没有任何笔记或文档
+            <br />
+            点击上方按钮，或直接把文件拖入此处上传
           </div>
         ) : (
           tree.map((node) => renderItem(node, 0))
         )}
       </div>
 
-      {/* 底部工具栏 */}
+      {/* 底部工具栏（已移除 OneNote 导入入口，退出登录增加确认） */}
       <div className="p-2.5 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
-        <button
-          type="button"
-          onClick={() => setMigrationOpen(true)}
-          className="flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-200/70 dark:hover:bg-slate-800 font-medium text-blue-700 dark:text-blue-400"
-        >
-          <Download className="w-3.5 h-3.5" />
-          OneNote 导入
-        </button>
+        <span className="text-[11px] text-slate-400">右键目录可管理 · 支持拖入上传</span>
 
         <div className="flex items-center gap-1">
           <button
@@ -359,14 +552,173 @@ export const SidebarTree: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={() => setUser(null, null)}
-            className="p-1.5 rounded hover:bg-slate-200/70 dark:hover:bg-slate-800"
+            onClick={handleLogout}
+            className="p-1.5 rounded hover:bg-red-50 hover:text-red-600 dark:hover:bg-slate-800"
             title="退出登录"
           >
             <LogOut className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
+
+      {/* PC 端右键上下文菜单 */}
+      {contextMenu && (
+        <div
+          style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+          onClick={(e) => e.stopPropagation()}
+          className="fixed z-50 w-48 py-1 rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-700 dark:text-slate-200"
+        >
+          {contextMenu.node ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  const n = contextMenu.node!;
+                  setContextMenu(null);
+                  void handleCreate('note', n.id);
+                }}
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <Plus className="w-3.5 h-3.5 text-blue-600" />
+                新建子笔记
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const n = contextMenu.node!;
+                  setContextMenu(null);
+                  void handleCreate('folder', n.id);
+                }}
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <FolderPlus className="w-3.5 h-3.5 text-slate-500" />
+                新建子目录
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const n = contextMenu.node!;
+                  setContextMenu(null);
+                  triggerUpload(n.id);
+                }}
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <Upload className="w-3.5 h-3.5 text-emerald-600" />
+                上传文档到此目录
+              </button>
+              <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+              <button
+                type="button"
+                onClick={() => {
+                  const n = contextMenu.node!;
+                  setContextMenu(null);
+                  void handleRename(n);
+                }}
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                重命名
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const n = contextMenu.node!;
+                  setContextMenu(null);
+                  void handleTogglePin(n);
+                }}
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <Pin className="w-3.5 h-3.5 text-amber-500" />
+                {contextMenu.node.isPinned ? '取消置顶' : '置顶节点'}
+              </button>
+              {contextMenu.node.parentId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const n = contextMenu.node!;
+                    setContextMenu(null);
+                    void handleMoveToRoot(n.id);
+                  }}
+                  className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  <CornerLeftUp className="w-3.5 h-3.5" />
+                  移至根目录
+                </button>
+              )}
+              <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+              <button
+                type="button"
+                onClick={() => {
+                  const n = contextMenu.node!;
+                  setContextMenu(null);
+                  void handleDelete(n.id, n.title);
+                }}
+                className="w-full px-3 py-1.5 flex items-center gap-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                移至回收站
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setContextMenu(null);
+                  void handleCreate('note', null);
+                }}
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <Plus className="w-3.5 h-3.5 text-blue-600" />
+                新建顶级笔记
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setContextMenu(null);
+                  void handleCreate('folder', null);
+                }}
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <FolderPlus className="w-3.5 h-3.5 text-slate-500" />
+                新建顶级目录
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setContextMenu(null);
+                  triggerUpload(null);
+                }}
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <Upload className="w-3.5 h-3.5 text-emerald-600" />
+                上传文档到根目录
+              </button>
+              <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+              <button
+                type="button"
+                onClick={() => {
+                  setContextMenu(null);
+                  setAllExpanded(true);
+                }}
+                className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                全部展开目录
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setContextMenu(null);
+                  setAllExpanded(false);
+                }}
+                className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                全部折叠目录
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </aside>
   );
 };

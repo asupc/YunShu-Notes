@@ -12,7 +12,7 @@
     "@fastify/jwt": "^8.0.1",
     "@hocuspocus/server": "^2.14.0",
     "@yunshu/shared": "*",
-    "better-sqlite3": "^11.5.0",
+    "better-sqlite3": "^12.11.1",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
     "mammoth": "^1.8.0",
