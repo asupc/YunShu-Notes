@@ -49,14 +49,14 @@ export function verifyStorageToken(storageKey: string, mode: 'put' | 'get', toke
   return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
 }
 
-export function buildSignedUploadUrl(storageKey: string): string {
+export function buildSignedUploadUrl(storageKey: string, baseUrl: string = config.publicApiBase): string {
   const token = signStorageToken(storageKey, 'put', 600);
   const encoded = encodeURIComponent(storageKey);
-  return `${config.publicApiBase}/api/v1/files/blob?key=${encoded}&token=${token}`;
+  return `${baseUrl.replace(/\/$/, '')}/api/v1/files/blob?key=${encoded}&token=${token}`;
 }
 
-export function buildSignedDownloadUrl(storageKey: string): string {
+export function buildSignedDownloadUrl(storageKey: string, baseUrl: string = config.publicApiBase): string {
   const token = signStorageToken(storageKey, 'get', 900);
   const encoded = encodeURIComponent(storageKey);
-  return `${config.publicApiBase}/api/v1/files/blob?key=${encoded}&token=${token}`;
+  return `${baseUrl.replace(/\/$/, '')}/api/v1/files/blob?key=${encoded}&token=${token}`;
 }
