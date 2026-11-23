@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 :root {
+  color-scheme: light;
   --bg-canvas: #ffffff;
   --bg-sidebar: #f8fafc;
   --bg-hover: #f1f5f9;
@@ -11,9 +12,12 @@
   --text-primary: #0f172a;
   --text-secondary: #334155;
   --text-muted: #475569;
+  --scrollbar-thumb: rgba(148, 163, 184, 0.45);
+  --scrollbar-thumb-hover: rgba(100, 116, 139, 0.7);
 }
 
 [data-theme='dark'] {
+  color-scheme: dark;
   --bg-canvas: #0f172a;
   --bg-sidebar: #1e293b;
   --bg-hover: #334155;
@@ -22,6 +26,8 @@
   --text-primary: #f8fafc;
   --text-secondary: #cbd5e1;
   --text-muted: #94a3b8;
+  --scrollbar-thumb: rgba(100, 116, 139, 0.35);
+  --scrollbar-thumb-hover: rgba(148, 163, 184, 0.55);
 }
 
 html,
@@ -32,6 +38,33 @@ body,
   background-color: var(--bg-canvas);
   color: var(--text-primary);
   font-family: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', -apple-system, sans-serif;
+}
+
+/* 精致细滚动条美化（解决 Windows 深色模式下默认刺眼白滚动条） */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.tree-scroll {
+  scrollbar-gutter: stable;
 }
 
 .safe-area-shell {
@@ -94,6 +127,17 @@ body,
   font-family: 'JetBrains Mono', Consolas, monospace;
   font-size: 13px;
   overflow-x: auto;
+}
+.ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 0.75rem 0;
+  border: 1px solid var(--border-subtle);
+}
+.ProseMirror img.ProseMirror-selectednode {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 .ProseMirror p.is-editor-empty:first-child::before {
   color: #94a3b8;

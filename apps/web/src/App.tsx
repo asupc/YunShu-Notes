@@ -6,6 +6,7 @@ import { OfficePreview } from './components/OfficePreview';
 import { SearchModal } from './components/SearchModal';
 import { SidebarTree } from './components/SidebarTree';
 import { useLayoutMode } from './hooks/useLayoutMode';
+import { isTauriRuntime } from './lib/api';
 import { useAppStore } from './store/useAppStore';
 
 function formatSyncTime(iso: string | null): string {
@@ -157,13 +158,17 @@ export const App: React.FC = () => {
               <Menu className="w-4 h-4" />
             </button>
           )}
-          <img src="/logo-192.png" alt="云树笔记" className="w-5 h-5 rounded shrink-0" />
-          <span className="text-sm font-bold text-slate-900 dark:text-slate-100 shrink-0">云树笔记</span>
-          {activeNode && (
+          {!isTauriRuntime() && (
             <>
-              <span className="text-slate-300 shrink-0">/</span>
-              <span className="text-xs text-slate-600 dark:text-slate-300 truncate">{activeNode.title}</span>
+              <img src="/logo-192.png" alt="云树笔记" className="w-5 h-5 rounded shrink-0" />
+              <span className="text-sm font-bold text-slate-900 dark:text-slate-100 shrink-0">云树笔记</span>
+              {activeNode && <span className="text-slate-300 shrink-0">/</span>}
             </>
+          )}
+          {activeNode ? (
+            <span className="text-xs font-medium text-slate-700 dark:text-slate-200 truncate">{activeNode.title}</span>
+          ) : (
+            isTauriRuntime() && <span className="text-xs text-slate-400">全部笔记</span>
           )}
         </div>
 
