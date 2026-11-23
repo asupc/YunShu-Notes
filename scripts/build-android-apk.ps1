@@ -16,6 +16,9 @@
       Gradle       : 发行包与依赖缓存在 yunshu-gradle-cache 卷
       cargo 产物   : yunshu-cargo-target 卷（Rust 增量编译）
       npm 缓存     : yunshu-npm-cache 卷
+      构建工作区   : node_modules / gen/android（含 Gradle-Kotlin 增量产物）/
+                     前端 dist 保存在 yunshu-android-work 卷，第二次起只做增量
+                     同步与增量编译，无需重新 npm install / tauri android init
 
     默认构建「已签名」的 release APK：
       - 首次运行自动用 keytool 生成自签名证书
@@ -46,8 +49,9 @@
     release 构建时也保持版本号不变。
 
 .PARAMETER RefreshDeps
-    构建前删除 Gradle / cargo target / npm 缓存卷，强制重新下载依赖
-    （不会删除 SDK、Rust 工具链等大体积卷）。
+    构建前删除 Gradle / cargo target / npm 缓存卷与构建工作卷，强制重新下载依赖并
+    重新初始化 Android 工程（不会删除 SDK、Rust 工具链等大体积卷）。
+    注意：工作卷被清空后，本次构建会变慢，之后的构建恢复增量速度。
 
 .PARAMETER NewKeystore
     删除已有 release 证书并重新生成。注意：新证书签名的 APK 无法覆盖安装旧版本。
@@ -93,7 +97,7 @@
 
 .EXAMPLE
     .\scripts\build-android-apk.ps1 -RefreshDeps -NoMirror
-    清空依赖缓存并全部走官方源重新构建
+    清空依赖与构建缓存，并全部走官方源重新构建
 #>
 param(
     [switch]$DebugBuild,
@@ -133,6 +137,7 @@ $NpmCacheVolume    = 'yunshu-npm-cache'
 $CargoHomeVolume   = 'yunshu-cargo-home'
 $RustupVolume      = 'yunshu-rustup-home'
 $CargoTargetVolume = 'yunshu-cargo-target'
+$WorkVolume        = 'yunshu-android-work'
 $AptListsVolume    = 'yunshu-apt-lists'
 $AptCacheVolume    = 'yunshu-apt-cache'
 
@@ -179,6 +184,24 @@ if ($LASTEXITCODE -ne 0) {
 foreach ($f in @($ConfFile, $CargoFile)) {
     if (-not (Test-Path $f)) { Fail "文件不存在：$f" }
 }
+
+# 同一时间只允许一个构建：避免两个实例同时自增版本号或写同一个工作卷
+$BuildMutex = New-Object System.Threading.Mutex($false, 'yunshu-android-build')
+if (-not $BuildMutex.WaitOne(0)) {
+    Fail '另一个 Android 构建正在运行，请等待其结束后重试。'
+}
+
+# 上次构建若被 Ctrl+C 中断，docker run 客户端退出后容器仍可能继续运行，
+# 占着工作卷和 apt 缓存卷的锁；这里按工作卷精确清理这些残留容器。
+& docker rm -f yunshu-android-build 2>&1 | Out-Null
+$staleBuildContainers = @(& docker ps -aq --filter "volume=$WorkVolume" 2>$null)
+if ($staleBuildContainers.Count -gt 0) {
+    Write-Warn "发现上次中断残留的构建容器，正在清理：$($staleBuildContainers -join ', ')"
+    & docker rm -f $staleBuildContainers 2>&1 | Out-Null
+}
+
+# Gradle 守护进程堆大小：与 Tauri 模板默认一致；容器限制内存时再降低，避免 OOM
+$GradleHeap = if ($Memory) { '1g' } else { '2g' }
 
 # ---------------------------------------------------------------------------
 # 国内镜像（失败时容器脚本会回退官方源）
@@ -287,13 +310,17 @@ if ($isRelease -and (Test-Path $KeystoreFile)) {
 # 缓存卷
 # ---------------------------------------------------------------------------
 if ($RefreshDeps) {
-    Write-Step '清理 Gradle / cargo target / npm 缓存卷'
-    foreach ($v in @($GradleVolume, $CargoTargetVolume, $NpmCacheVolume)) {
+    Write-Step '清理 Gradle / cargo target / npm 缓存卷与构建工作卷'
+    Write-Warn '工作卷清空后本次会重新 npm install 并重建 Android 工程，构建时间会变长'
+    foreach ($v in @($GradleVolume, $CargoTargetVolume, $NpmCacheVolume, $WorkVolume)) {
         & docker volume rm $v 2>&1 | Out-Null
     }
 }
 
-foreach ($v in @($SdkVolume, $GradleVolume, $NodeVolume, $NpmCacheVolume, $CargoHomeVolume, $RustupVolume, $CargoTargetVolume, $AptListsVolume, $AptCacheVolume)) {
+$volumeNames = @($SdkVolume, $GradleVolume, $NodeVolume, $NpmCacheVolume, $CargoHomeVolume, $RustupVolume, $CargoTargetVolume, $WorkVolume, $AptListsVolume, $AptCacheVolume)
+$existingVolumes = @(& docker volume ls -q 2>$null)
+foreach ($v in $volumeNames) {
+    if ($existingVolumes -contains $v) { continue }
     & docker volume create $v 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Fail "创建 docker 卷失败：$v" }
 }
@@ -332,12 +359,27 @@ if [ -n "${CARGO_MIRROR:-}" ]; then
     export RUSTUP_UPDATE_ROOT="$CARGO_MIRROR/rustup"
 fi
 
-if ! have unzip || ! have cc || ! have pkg-config; then
-    log "安装构建工具（unzip / gcc / make / pkg-config）"
+if ! have unzip || ! have cc || ! have pkg-config || ! have rsync; then
+    log "安装构建工具（unzip / gcc / make / pkg-config / rsync）"
     mkdir -p /var/cache/apt/archives/partial
     chown -R _apt:root /var/cache/apt/archives 2>/dev/null || true
-    apt-get update -qq >/dev/null
-    apt-get install -y -qq --no-install-recommends unzip build-essential pkg-config >/dev/null
+    # 上次构建异常中断可能在工作卷里留下 apt 锁文件；残留容器已在宿主机侧清理，
+    # 这里删掉锁文件，避免 fcntl 锁随卷保留导致 "held by process 0"。
+    rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock
+    apt_retry() {
+        attempts=0
+        until "$@" >/dev/null; do
+            attempts=$((attempts + 1))
+            if [ "$attempts" -ge 3 ]; then
+                echo "错误：apt 命令失败：$*" >&2
+                return 1
+            fi
+            echo "==> apt 暂时失败，2 秒后重试（$attempts/3）" >&2
+            sleep 2
+        done
+    }
+    apt_retry apt-get update -qq
+    apt_retry apt-get install -y -qq --no-install-recommends unzip build-essential pkg-config rsync
 fi
 
 # ------------------------------ Node.js ------------------------------
@@ -384,10 +426,21 @@ else
     rm -f "$CARGO_HOME/config.toml"
 fi
 
-if ! rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android; then
-    log "Rust target 下载失败，回退官方源"
-    unset RUSTUP_DIST_SERVER RUSTUP_UPDATE_ROOT || true
-    rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+RUST_TARGETS="aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android"
+installed_targets="$(rustup target list --installed 2>/dev/null || true)"
+missing_targets=""
+for t in $RUST_TARGETS; do
+    printf '%s\n' "$installed_targets" | grep -qx "$t" || missing_targets="$missing_targets $t"
+done
+if [ -n "$missing_targets" ]; then
+    log "安装 Rust Android target：$missing_targets"
+    # shellcheck disable=SC2086
+    if ! rustup target add $missing_targets; then
+        log "Rust target 下载失败，回退官方源"
+        unset RUSTUP_DIST_SERVER RUSTUP_UPDATE_ROOT || true
+        # shellcheck disable=SC2086
+        rustup target add $missing_targets
+    fi
 fi
 
 # ------------------------------ Android SDK ------------------------------
@@ -410,7 +463,9 @@ if [ ! -x "$SDKMANAGER" ]; then
     fi
 fi
 SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+if [ ! -f "$ANDROID_HOME/licenses/android-sdk-license" ]; then
+    yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+fi
 
 sdk_install() {
     if [ -n "${SDK_TEST_BASE_URL:-}" ]; then
@@ -439,27 +494,51 @@ if [ -n "$NDK_HOME" ]; then
     log "使用 NDK：$NDK_HOME"
 fi
 
-# ------------------------------ 复制源码 ------------------------------
-log "复制源码到容器内 /tmp/app"
-rm -rf /tmp/app
+# ------------------------------ 同步源码 ------------------------------
+# /tmp/app 由 docker 工作卷持久化：node_modules、gen/android（含增量编译产物）、
+# 前端 dist 与 tsc 状态都跨次保留，这里只做增量同步。
+log "增量同步源码到 /tmp/app（保留 node_modules / gen / dist）"
 mkdir -p /tmp/app /cargo-target
-cd /src
-tar -cf - \
-    --exclude=./.git \
-    --exclude=./node_modules \
-    --exclude=./apps/tauri-app/src-tauri/target \
-    --exclude=./apps/tauri-app/src-tauri/gen \
-    --exclude=./apps/tauri-app/dist \
-    --exclude=./apps/web/dist \
-    --exclude=./packages/shared/dist \
-    --exclude=./data \
-    . | tar -xf - -C /tmp/app
+if have flock; then
+    exec 9>/tmp/app/.yunshu-build.lock
+    flock -n 9 || { echo "错误：另一个构建正在使用工作卷" >&2; exit 1; }
+fi
+
+rsync -a --whole-file --delete \
+    --exclude='/.git/' \
+    --exclude='node_modules/' \
+    --exclude='*.tsbuildinfo' \
+    --exclude='/.runtime-data/' \
+    --exclude='/data/' \
+    --exclude='/apps/tauri-app/src-tauri/target' \
+    --exclude='/apps/tauri-app/src-tauri/gen/' \
+    --exclude='/apps/tauri-app/src-tauri/tauri' \
+    --exclude='/apps/tauri-app/keystore/' \
+    --exclude='/apps/tauri-app/dist/' \
+    --exclude='/apps/web/dist/' \
+    --exclude='/packages/shared/dist/' \
+    --exclude='/.yunshu-build.lock' \
+    --exclude='*.log' \
+    /src/ /tmp/app/
+
 cd /tmp/app
-ln -sfn /cargo-target apps/tauri-app/src-tauri/target
+TAURI_SRC=apps/tauri-app/src-tauri
+# 工作卷首次挂载时 target 可能是普通目录，统一改为指向 cargo 缓存卷的软链接
+if [ -e "$TAURI_SRC/target" ] && [ ! -L "$TAURI_SRC/target" ]; then
+    rm -rf "$TAURI_SRC/target"
+fi
+ln -sfn /cargo-target "$TAURI_SRC/target"
 
 # ------------------------------ 前端依赖与 Tauri CLI ------------------------------
-log "安装前端依赖（npm install，跳过原生模块编译脚本）"
-npm install --ignore-scripts --no-audit --no-fund
+INSTALL_STAMP="node_modules/.yunshu-install-stamp"
+WANT_STAMP="$(sha256sum package-lock.json | cut -d' ' -f1)|$(node -v)|${NPM_CONFIG_REGISTRY:-official}"
+if [ -f "$INSTALL_STAMP" ] && [ "$(cat "$INSTALL_STAMP")" = "$WANT_STAMP" ]; then
+    log "package-lock.json 未变化，跳过 npm install"
+else
+    log "安装前端依赖（npm install，跳过原生模块编译脚本）"
+    npm install --ignore-scripts --no-audit --no-fund
+    printf '%s' "$WANT_STAMP" > "$INSTALL_STAMP"
+fi
 
 if ! tauri --version 2>/dev/null | grep -q "$TAURI_CLI_VERSION"; then
     log "安装 @tauri-apps/cli@$TAURI_CLI_VERSION"
@@ -489,18 +568,42 @@ fi
 
 # ------------------------------ 初始化 Android 工程 ------------------------------
 cd /tmp/app/apps/tauri-app
-if [ ! -d src-tauri/gen/android ]; then
-    log "初始化 Tauri Android 工程"
+CONF_KEY="$(node -e 'const fs=require("fs"),crypto=require("crypto");const c=JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json","utf8"));const a=(c.bundle&&c.bundle.android)||{};process.stdout.write(crypto.createHash("sha256").update(JSON.stringify([c.identifier,c.productName,c.mainBinaryName||"",a])).digest("hex"));')"
+INIT_KEY="$TAURI_CLI_VERSION|$CONF_KEY"
+INIT_MARK=src-tauri/gen/android/.yunshu-init
+if [ ! -d src-tauri/gen/android ] || [ ! -f "$INIT_MARK" ] || [ "$(cat "$INIT_MARK")" != "$INIT_KEY" ]; then
+    log "初始化 Tauri Android 工程（首次或应用标识 / Tauri CLI 版本变化）"
+    rm -rf src-tauri/gen/android
     tauri android init --ci --skip-targets-install
+    printf '%s' "$INIT_KEY" > "$INIT_MARK"
 fi
 
-if [ -f /tmp/app/apps/tauri-app/logo-source-1024.png ]; then
-    log "同步与 PC 端一致的云树笔记应用图标到 Android 工程"
-    tauri icon /tmp/app/apps/tauri-app/logo-source-1024.png
+# 图标仅在源图变化时重新生成；背景色修正保持幂等
+LOGO_FILE=logo-source-1024.png
+ICON_MARK=src-tauri/gen/android/.yunshu-icon
+if [ -f "$LOGO_FILE" ]; then
+    LOGO_HASH="$(sha256sum "$LOGO_FILE" | cut -d' ' -f1)"
+    if [ ! -f "$ICON_MARK" ] || [ "$(cat "$ICON_MARK")" != "$LOGO_HASH" ]; then
+        log "同步与 PC 端一致的云树笔记应用图标到 Android 工程"
+        tauri icon "$LOGO_FILE"
+        printf '%s' "$LOGO_HASH" > "$ICON_MARK"
+    fi
     BG_XML="src-tauri/gen/android/app/src/main/res/values/ic_launcher_background.xml"
-    if [ -f "$BG_XML" ]; then
+    if [ -f "$BG_XML" ] && ! grep -q '<color name="ic_launcher_background">#000000</color>' "$BG_XML"; then
         sed -i 's|<color name="ic_launcher_background">[^<]*</color>|<color name="ic_launcher_background">#000000</color>|g' "$BG_XML"
     fi
+fi
+
+# Gradle 增量与并行：jvmargs 必须写在项目级 gradle.properties 才能覆盖模板值
+GRADLE_PROPS=src-tauri/gen/android/gradle.properties
+if ! grep -q 'yunshu-gradle-tuning' "$GRADLE_PROPS" 2>/dev/null; then
+    cat >> "$GRADLE_PROPS" <<EOF
+
+# yunshu-gradle-tuning: 由构建脚本追加的增量编译配置
+org.gradle.parallel=true
+org.gradle.caching=true
+org.gradle.jvmargs=-Xmx${GRADLE_HEAP:-2g} -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+EOF
 fi
 
 if [ "$BUILD_KIND" = "release" ]; then
@@ -518,11 +621,18 @@ fi
 
 # ------------------------------ Gradle 镜像 ------------------------------
 GW=src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties
-if [ -n "${GRADLE_DIST_MIRROR:-}" ] && [ -f "$GW" ]; then
+if [ -f "$GW" ]; then
     dist_file=$(grep -E '^distributionUrl=' "$GW" | head -1 | sed 's|.*/||' | tr -d '\r')
-    if [ -n "$dist_file" ] && curl -fsIL --connect-timeout 10 "$GRADLE_DIST_MIRROR/$dist_file" >/dev/null 2>&1; then
-        sed -i "s|^distributionUrl=.*|distributionUrl=$GRADLE_DIST_MIRROR/$dist_file|" "$GW"
-        log "Gradle 发行包使用镜像：$GRADLE_DIST_MIRROR/$dist_file"
+    if [ -n "${GRADLE_DIST_MIRROR:-}" ]; then
+        if grep -q "^distributionUrl=$GRADLE_DIST_MIRROR/" "$GW"; then
+            log "Gradle 发行包已使用镜像：$GRADLE_DIST_MIRROR/$dist_file"
+        elif [ -n "$dist_file" ] && curl -fsIL --connect-timeout 10 "$GRADLE_DIST_MIRROR/$dist_file" >/dev/null 2>&1; then
+            sed -i "s|^distributionUrl=.*|distributionUrl=$GRADLE_DIST_MIRROR/$dist_file|" "$GW"
+            log "Gradle 发行包使用镜像：$GRADLE_DIST_MIRROR/$dist_file"
+        fi
+    elif [ -n "$dist_file" ]; then
+        # -NoMirror：持久化工程可能残留镜像地址，恢复官方源
+        sed -i "s|^distributionUrl=.*|distributionUrl=https://services.gradle.org/distributions/$dist_file|" "$GW"
     fi
 fi
 if [ "$MAVEN_MIRROR" = "1" ]; then
@@ -548,6 +658,10 @@ else
 fi
 
 # ------------------------------ 构建 ------------------------------
+APK_ROOT=src-tauri/gen/android/app/build/outputs/apk
+# 持久化工程里可能残留上一次的 APK，先清掉避免被当成新产物复制/改名
+rm -rf "$APK_ROOT"
+
 log "开始构建 Android $BUILD_KIND APK（target: $ANDROID_TARGET）"
 if [ "$BUILD_KIND" = "debug" ]; then
     tauri android build --debug --apk --target "$ANDROID_TARGET" --ci --ignore-version-mismatches
@@ -555,7 +669,6 @@ else
     tauri android build --apk --target "$ANDROID_TARGET" --ci --ignore-version-mismatches
 fi
 
-APK_ROOT=src-tauri/gen/android/app/build/outputs/apk
 if [ "$BUILD_KIND" = "release" ]; then
     APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)"
     if [ -z "$APKSIGNER" ]; then
@@ -593,6 +706,7 @@ const fs = require('fs');
 
 function patchAppGradle(file) {
     let src = fs.readFileSync(file, 'utf8');
+    const original = src;
     if (src.indexOf('\nandroid {') === -1) {
         console.error('错误：未找到 android 代码块：' + file);
         process.exit(1);
@@ -644,51 +758,65 @@ function patchAppGradle(file) {
         console.log('==> 已注入 release 签名配置：' + file);
     }
 
-    // ---- APK 体积优化 ----
-    if (src.indexOf('yunshuSizeOptimized') === -1) {
-        // Tauri 默认把 .so 不压缩地放进 APK（minSdk>=23 且未设 useLegacyPackaging）。
-        // 原生库约占包体 85%，压缩后传输体积可减半以上；代价是安装时解压到应用目录。
-        // 用 -NoSoCompress 可跳过这一步。
-        if (process.env.LEGACY_PACKAGING === '1' &&
-            src.indexOf('useLegacyPackaging = true') === -1) {
-            const packaging = [
-                '',
-                '    // yunshuSizeOptimized: 压缩 APK 内的原生库',
-                '    packaging {',
-                '        jniLibs {',
-                '            useLegacyPackaging = true',
-                '        }',
-                '    }'
-            ].join('\n');
+    // ---- .so 压缩开关（LEGACY_PACKAGING）----
+    // Tauri 默认把 .so 不压缩地放进 APK（minSdk>=23 且未设 useLegacyPackaging）。
+    // 原生库约占包体 85%，压缩后传输体积可减半以上；代价是安装时解压到应用目录。
+    // 用 -NoSoCompress 关闭；持久化 gen 后必须能反向移除之前注入的块。
+    const packaging = [
+        '',
+        '    // yunshuSizeOptimized: 压缩 APK 内的原生库',
+        '    packaging {',
+        '        jniLibs {',
+        '            useLegacyPackaging = true',
+        '        }',
+        '    }'
+    ].join('\n');
+    if (process.env.LEGACY_PACKAGING === '1') {
+        if (src.indexOf('useLegacyPackaging = true') === -1) {
             src = src.replace('\nandroid {', '\nandroid {' + packaging);
+            console.log('==> 已开启 APK 原生库压缩：' + file);
         }
-
-        // appcompat / material / webkit 等依赖自带几十套本地化资源，
-        // 应用界面固定为中文，只保留中英文资源即可。
-        if (src.indexOf('resourceConfigurations') === -1 &&
-            src.indexOf('defaultConfig {') !== -1) {
-            src = src.replace('defaultConfig {',
-                'defaultConfig {\n' +
-                '        // yunshuSizeOptimized: 只保留中英文资源\n' +
-                '        resourceConfigurations += listOf("zh", "en")');
-        }
-
-        console.log('==> 已注入 APK 体积优化配置：' + file);
+    } else if (src.indexOf('yunshuSizeOptimized') !== -1) {
+        src = src.replace(
+            /\n[ \t]*\/\/ yunshuSizeOptimized:[^\n]*\n[ \t]*packaging \{\n[ \t]*jniLibs \{\n[ \t]*useLegacyPackaging = true\n[ \t]*\}\n[ \t]*\}/,
+            '');
+        console.log('==> 已关闭 APK 原生库压缩：' + file);
     }
 
-    fs.writeFileSync(file, src);
+    // appcompat / material / webkit 等依赖自带几十套本地化资源，
+    // 应用界面固定为中文，只保留中英文资源即可。
+    if (src.indexOf('resourceConfigurations') === -1 &&
+        src.indexOf('defaultConfig {') !== -1) {
+        src = src.replace('defaultConfig {',
+            'defaultConfig {\n' +
+            '        // yunshuSizeOptimized: 只保留中英文资源\n' +
+            '        resourceConfigurations += listOf("zh", "en")');
+        console.log('==> 已裁剪本地化资源：' + file);
+    }
+
+    if (src !== original) {
+        fs.writeFileSync(file, src);
+    }
 }
 
 function patchRootGradle(file) {
-    if (process.env.MAVEN_MIRROR !== '1') return;
     let src = fs.readFileSync(file, 'utf8');
-    if (src.indexOf('maven.aliyun.com') !== -1) return;
-    src = src.replace(/^([ \t]*)google\(\)$/gm,
-        '$1maven { url = uri("https://maven.aliyun.com/repository/google") }\n$1google()');
-    src = src.replace(/^([ \t]*)mavenCentral\(\)$/gm,
-        '$1maven { url = uri("https://maven.aliyun.com/repository/public") }\n$1mavenCentral()');
-    fs.writeFileSync(file, src);
-    console.log('==> 已注入 Maven 镜像仓库：' + file);
+    const original = src;
+    if (process.env.MAVEN_MIRROR === '1') {
+        if (src.indexOf('maven.aliyun.com') === -1) {
+            src = src.replace(/^([ \t]*)google\(\)$/gm,
+                '$1maven { url = uri("https://maven.aliyun.com/repository/google") }\n$1google()');
+            src = src.replace(/^([ \t]*)mavenCentral\(\)$/gm,
+                '$1maven { url = uri("https://maven.aliyun.com/repository/public") }\n$1mavenCentral()');
+        }
+    } else {
+        // -NoMirror：移除本脚本此前注入的阿里云仓库行
+        src = src.replace(/^[ \t]*maven \{ url = uri\("https:\/\/maven\.aliyun\.com[^"]*"\) \}\r?\n/gm, '');
+    }
+    if (src !== original) {
+        fs.writeFileSync(file, src);
+        console.log('==> 已更新 Maven 镜像仓库：' + file);
+    }
 }
 
 const appFile = process.env.GRADLE_APP_FILE;
@@ -705,6 +833,7 @@ $patchScriptPath = Join-Path $stageDir 'patch-gradle.js'
 # ---------------------------------------------------------------------------
 $dockerArgs = @(
     'run', '--rm',
+    '--name', 'yunshu-android-build',
     '--cpus', "$Cpus"
 )
 if ($Memory) { $dockerArgs += @('--memory', $Memory) }
@@ -721,6 +850,7 @@ $dockerArgs += @(
     '--mount', "type=volume,source=$CargoHomeVolume,target=/opt/cargo",
     '--mount', "type=volume,source=$RustupVolume,target=/opt/rustup",
     '--mount', "type=volume,source=$CargoTargetVolume,target=/cargo-target",
+    '--mount', "type=volume,source=$WorkVolume,target=/tmp/app",
     '--mount', "type=volume,source=$AptListsVolume,target=/var/lib/apt/lists",
     '--mount', "type=volume,source=$AptCacheVolume,target=/var/cache/apt/archives",
     '-e', 'ANDROID_HOME=/opt/android-sdk',
@@ -739,6 +869,7 @@ $dockerArgs += @(
     '-e', "GRADLE_DIST_MIRROR=$GradleDistMirror",
     '-e', "MAVEN_MIRROR=$MavenMirror",
     '-e', "LEGACY_PACKAGING=$LegacyPackaging",
+    '-e', "GRADLE_HEAP=$GradleHeap",
     '-e', "KEYSTORE_ALIAS=$KeystoreAlias",
     '-e', "KEYSTORE_PASSWORD=$KeystorePassword",
     '-e', "KEYSTORE_FILE_NAME=$KeystoreFileName",
@@ -748,7 +879,7 @@ $dockerArgs += @(
 )
 
 Write-Step "启动容器构建（$BuildKind / $AndroidTarget，镜像 $JdkImage，$Cpus 核）"
-Write-Host '首次运行需要下载 Node / Rust / Android SDK / NDK，可能耗时较久；后续构建会复用 docker 卷。' -ForegroundColor DarkGray
+Write-Host '首次运行需要下载 Node / Rust / Android SDK / NDK，可能耗时较久；后续构建会复用 docker 卷并做增量编译。' -ForegroundColor DarkGray
 
 try {
     & docker @dockerArgs
