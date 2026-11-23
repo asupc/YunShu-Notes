@@ -1,8 +1,7 @@
 import crypto from 'node:crypto';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { rankBetween } from '@yunshu/shared';
-import { config } from '../config';
 import { db } from '../db';
 import { enqueuePreviewTask } from '../previewQueue';
 import {
@@ -15,20 +14,6 @@ import {
 import { requireAuth } from './auth';
 
 export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
-  /**
-   * 按客户端实际访问的协议/主机生成签名 URL：
-   * 走域名时得到 https://note.678120.cn:8888，走局域网 IP 时得到
-   * http://192.168.1.71:8080，桌面端直连端口时得到对应端口地址。
-   * 请求头缺失时回退到 PUBLIC_API_BASE。
-   */
-  function requestBase(req: FastifyRequest): string {
-    const first = (value: string | string[] | undefined): string | undefined =>
-      (Array.isArray(value) ? value[0] : value)?.split(',')[0]?.trim();
-    const proto = first(req.headers['x-forwarded-proto']) ?? req.protocol ?? 'http';
-    const host = first(req.headers['x-forwarded-host']) ?? first(req.headers.host);
-    return host ? `${proto}://${host}` : config.publicApiBase;
-  }
-
   // 允许二进制流直传至本地磁盘（最大 200 MB）
   app.addContentTypeParser('*', { parseAs: 'buffer', bodyLimit: 200 * 1024 * 1024 }, (_req, body, done) => {
     done(null, body);
@@ -93,7 +78,7 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
 
     const safeName = fileName.replace(/[^a-zA-Z0-9._\-\u4e00-\u9fa5]/g, '_');
     const storageKey = `files/${sha256}/${safeName}`;
-    const uploadUrl = buildSignedUploadUrl(storageKey, requestBase(req));
+    const uploadUrl = buildSignedUploadUrl(storageKey);
     return {
       alreadyExists: false,
       storageKey,
@@ -250,10 +235,8 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       mimeType: file.mime_type,
       fileSize: Number(file.file_size),
       sha256: file.sha256,
-      downloadUrl: buildSignedDownloadUrl(file.storage_key, requestBase(req)),
-      previewPdfUrl: file.preview_pdf_key
-        ? buildSignedDownloadUrl(file.preview_pdf_key, requestBase(req))
-        : null,
+      downloadUrl: buildSignedDownloadUrl(file.storage_key),
+      previewPdfUrl: file.preview_pdf_key ? buildSignedDownloadUrl(file.preview_pdf_key) : null,
       previewStatus: file.preview_status,
     };
   });
