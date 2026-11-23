@@ -1,9 +1,8 @@
 services:
   yunshu-server:
-    build:
-      context: ./app
-      dockerfile: apps/server/Dockerfile
-    image: yunshu-server:local
+    # 镜像由 scripts/deploy-fnos.sh 在本机构建后 load 上飞牛，image tag 每次部署自动回填。
+    # 不要再加 build: —— 本文件是「镜像部署」的权威配置，避免误用远端陈旧源码重建。
+    image: "yunshu-server:local"
     container_name: yunshu-server
     restart: unless-stopped
     environment:

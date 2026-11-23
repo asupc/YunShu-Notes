@@ -1,4 +1,6 @@
-FROM node:20-slim
+# 基础镜像可由部署脚本换成本地镜像站引用（默认官方 node:20-slim）
+ARG NODE_IMAGE=node:20-slim
+FROM ${NODE_IMAGE}
 
 # 国内网络默认走阿里云 Debian 镜像；海外构建可传 --build-arg DEBIAN_MIRROR=deb.debian.org
 ARG DEBIAN_MIRROR=mirrors.aliyun.com
