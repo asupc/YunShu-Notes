@@ -77,6 +77,14 @@ export function markdownToHtml(md: string): string {
       continue;
     }
 
+    // 图片 ![alt](url)
+    const imgMatch = line.trim().match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    if (imgMatch) {
+      out.push(`<img src="${escapeHtml(imgMatch[2])}" alt="${escapeHtml(imgMatch[1])}" />`);
+      i += 1;
+      continue;
+    }
+
     if (line.trim() === '') {
       i += 1;
       continue;
@@ -139,6 +147,10 @@ export function htmlToMarkdown(html: string): string {
         });
         lines.push('');
       }
+    } else if (tag === 'img') {
+      const src = el.getAttribute('src') ?? '';
+      const alt = el.getAttribute('alt') ?? '图片';
+      if (src) lines.push(`![${alt}](${src})`, '');
     } else if (tag === 'p') {
       const t = el.textContent?.trim() ?? '';
       if (t) lines.push(t, '');

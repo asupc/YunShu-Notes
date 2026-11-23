@@ -8,6 +8,7 @@ import Table from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
 import TableHeader from '@tiptap/extension-table-header';
 import TableCell from '@tiptap/extension-table-cell';
+import Image from '@tiptap/extension-image';
 import {
   Bold,
   CheckSquare,
@@ -15,6 +16,7 @@ import {
   Download,
   Heading1,
   Heading2,
+  Image as ImageIcon,
   Italic,
   List,
   Table as TableIcon,
@@ -33,7 +35,22 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
   const markSyncedNow = useAppStore((s) => s.markSyncedNow);
   const [title, setTitle] = useState(node.title);
   const [saveState, setSaveState] = useState<'synced' | 'saving'>('synced');
+  const [uploadingImg, setUploadingImg] = useState(false);
   const saveTimerRef = useRef<number | null>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+
+  const uploadAndInsertImage = async (file: File, targetEditor: ReturnType<typeof useEditor>) => {
+    if (!targetEditor || !file.type.startsWith('image/')) return;
+    setUploadingImg(true);
+    try {
+      const { url } = await api.uploadImage(file);
+      targetEditor.chain().focus().setImage({ src: url, alt: file.name || '图片' }).run();
+    } catch (err) {
+      console.error('图片上传失败:', err);
+    } finally {
+      setUploadingImg(false);
+    }
+  };
 
   const editor = useEditor({
     extensions: [
@@ -44,10 +61,39 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
       TableRow,
       TableHeader,
       TableCell,
+      Image.configure({ inline: false, allowBase64: true }),
       Placeholder.configure({
-        placeholder: '开始输入笔记内容，支持 Markdown 快捷键（# 标题、- 列表、``` 代码块）与表格编辑...',
+        placeholder: '开始输入笔记内容，支持 Markdown 快捷键、表格、以及直接 Ctrl+V 粘贴或拖入图片...',
       }),
     ],
+    editorProps: {
+      handlePaste: (_view, event) => {
+        const items = event.clipboardData?.items;
+        if (!items) return false;
+        for (const item of Array.from(items)) {
+          if (item.type.startsWith('image/')) {
+            const file = item.getAsFile();
+            if (file) {
+              event.preventDefault();
+              void uploadAndInsertImage(file, editor);
+              return true;
+            }
+          }
+        }
+        return false;
+      },
+      handleDrop: (_view, event) => {
+        const files = event.dataTransfer?.files;
+        if (!files || files.length === 0) return false;
+        const images = Array.from(files).filter((f) => f.type.startsWith('image/'));
+        if (images.length === 0) return false;
+        event.preventDefault();
+        for (const imgFile of images) {
+          void uploadAndInsertImage(imgFile, editor);
+        }
+        return true;
+      },
+    },
     content: '',
     onUpdate: ({ editor: ed }) => {
       setSaveState('saving');
@@ -77,7 +123,6 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
     };
   }, [node.id, editor]);
 
-  // 响应顶栏「手动同步」按钮，立即保存未落盘内容
   useEffect(() => {
     const onManualSync = async () => {
       if (!editor) return;
@@ -105,6 +150,16 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
     await loadTree();
   };
 
+  const handleImagePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0 && editor) {
+      for (const f of Array.from(files)) {
+        await uploadAndInsertImage(f, editor);
+      }
+    }
+    e.target.value = '';
+  };
+
   const handleExportMarkdown = () => {
     if (!editor) return;
     const bodyMd = htmlToMarkdown(editor.getHTML());
@@ -122,7 +177,16 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
 
   return (
     <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden bg-white dark:bg-slate-950">
-      {/* 顶部格式工具栏（支持表格插入与行列操作） */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        multiple
+        accept="image/*"
+        onChange={handleImagePick}
+        className="hidden"
+      />
+
+      {/* 顶部格式工具栏（含插入图片、表格与行列操作） */}
       <div className="px-3 sm:px-5 py-2 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 bg-white dark:bg-slate-950 shrink-0">
         <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
           <button
@@ -183,6 +247,15 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           </button>
           <button
             type="button"
+            disabled={uploadingImg}
+            onClick={() => imageInputRef.current?.click()}
+            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0 disabled:opacity-50"
+            title="插入图片（也可直接 Ctrl+V 粘贴或拖入）"
+          >
+            <ImageIcon className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
             onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
             className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
             title="插入表格 (3x3)"
@@ -195,28 +268,28 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
               <button
                 type="button"
                 onClick={() => editor?.chain().focus().addRowAfter().run()}
-                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200"
+                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
               >
                 +行
               </button>
               <button
                 type="button"
                 onClick={() => editor?.chain().focus().deleteRow().run()}
-                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200"
+                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
               >
                 -行
               </button>
               <button
                 type="button"
                 onClick={() => editor?.chain().focus().addColumnAfter().run()}
-                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200"
+                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
               >
                 +列
               </button>
               <button
                 type="button"
                 onClick={() => editor?.chain().focus().deleteColumn().run()}
-                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200"
+                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
               >
                 -列
               </button>
@@ -232,6 +305,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3 text-xs shrink-0">
+          {uploadingImg && <span className="text-blue-600 dark:text-blue-400">图片上传中...</span>}
           <span
             className={`px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${
               saveState === 'synced'
@@ -252,7 +326,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
         </div>
       </div>
 
-      {/* 全宽全高编辑画布：占满除导航栏以外的所有剩余区域 */}
+      {/* 全宽全高编辑画布 */}
       <div
         className="flex-1 w-full overflow-y-auto px-4 sm:px-6 lg:px-8 py-5 flex flex-col cursor-text"
         onClick={(e) => {

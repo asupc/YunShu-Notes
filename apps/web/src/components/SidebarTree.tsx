@@ -22,6 +22,7 @@ import type { NodeTreeItem, NodeType } from '@yunshu/shared';
 import { api, sha256File } from '../lib/api';
 import { markdownToHtml } from '../lib/markdown';
 import { useAppStore } from '../store/useAppStore';
+import { ConfirmDialog, RenameDialog } from './AppDialog';
 
 function NodeIcon({ type }: { type: NodeType }) {
   switch (type) {
@@ -43,7 +44,7 @@ function NodeIcon({ type }: { type: NodeType }) {
 interface ContextMenuState {
   x: number;
   y: number;
-  node: NodeTreeItem | null; // null 表示空白区根目录右键菜单
+  node: NodeTreeItem | null;
 }
 
 const NODE_DRAG_MIME = 'application/x-yunshu-node-id';
@@ -67,10 +68,21 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
   const [dropMode, setDropMode] = useState<'move' | 'upload' | null>(null);
   const [rootDropActive, setRootDropActive] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
+  // 美化弹窗状态：重命名、删除确认、退出登录确认
+  const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadParentRef = useRef<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    window.setTimeout(() => setToastMsg((cur) => (cur === msg ? null : cur)), 2800);
+  };
 
   // 智能目标目录：选中目录时在该目录下创建/上传；选中文档时在其所属目录下创建/上传
   const activeCreateTarget = useMemo(() => {
@@ -85,6 +97,43 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
     }
     return { id: null as string | null, label: '根目录' };
   }, [nodes, activeNodeId]);
+
+  // 防止拖入文件时浏览器直接打开文件导致离开应用
+  useEffect(() => {
+    const prevent = (e: DragEvent) => {
+      if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes('Files')) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('dragover', prevent);
+    window.addEventListener('drop', prevent);
+    return () => {
+      window.removeEventListener('dragover', prevent);
+      window.removeEventListener('drop', prevent);
+    };
+  }, []);
+
+  // F2 快捷键重命名当前选中的目录或笔记
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'F2') return;
+      const el = document.activeElement as HTMLElement | null;
+      const inInput =
+        el &&
+        (el.tagName === 'INPUT' ||
+          el.tagName === 'TEXTAREA' ||
+          el.isContentEditable ||
+          Boolean(el.closest('.ProseMirror')));
+      if (inInput) return;
+
+      const active = useAppStore.getState().nodes.find((n) => n.id === useAppStore.getState().activeNodeId);
+      if (!active) return;
+      e.preventDefault();
+      setRenameTarget({ id: active.id, title: active.title });
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -118,7 +167,6 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
       for (const file of list) {
         const lower = file.name.toLowerCase();
 
-        // Markdown 文件支持含表格的双向解析后直接导入为原生节点
         if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
           const text = await file.text();
           const html = markdownToHtml(text);
@@ -181,8 +229,9 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         if (parentId && !expandedIds[parentId]) toggleExpand(parentId);
         selectNode(created.node.id);
       }
+      showToast(`已成功上传 ${list.length} 个文件`);
     } catch (err) {
-      alert(err instanceof Error ? err.message : '上传文件失败');
+      showToast(err instanceof Error ? err.message : '上传文件失败');
     } finally {
       setUploading(false);
     }
@@ -200,10 +249,20 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
     e.target.value = '';
   };
 
-  const handleRename = async (item: NodeTreeItem) => {
-    const nextTitle = window.prompt('请输入新的名称：', item.title);
-    if (!nextTitle || !nextTitle.trim() || nextTitle.trim() === item.title) return;
-    await api.updateNode(item.id, { title: nextTitle.trim() });
+  const handleConfirmRename = async (nextTitle: string) => {
+    if (!renameTarget) return;
+    if (nextTitle !== renameTarget.title) {
+      await api.updateNode(renameTarget.id, { title: nextTitle });
+      await loadTree();
+    }
+    setRenameTarget(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return;
+    await api.deleteNode(deleteTarget.id);
+    if (activeNodeId === deleteTarget.id) selectNode(null);
+    setDeleteTarget(null);
     await loadTree();
   };
 
@@ -217,18 +276,6 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
     await loadTree();
   };
 
-  const handleDelete = async (id: string, title: string) => {
-    if (!window.confirm(`确定将「${title}」及其子项移入回收站吗？`)) return;
-    await api.deleteNode(id);
-    if (activeNodeId === id) selectNode(null);
-    await loadTree();
-  };
-
-  const handleLogout = () => {
-    if (!window.confirm('确定要退出当前账号吗？')) return;
-    setUser(null, null);
-  };
-
   const isExternalFileDrag = (e: React.DragEvent): boolean =>
     Array.from(e.dataTransfer.types).includes('Files');
 
@@ -238,14 +285,12 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
     setDropTargetId(null);
     setDropMode(null);
 
-    // 1. 外部文件拖拽上传：拖到哪个子目录就上传到哪个子目录（拖到普通文档则上传到其所在目录）
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const uploadTargetId = targetItem.nodeType === 'folder' ? targetItem.id : targetItem.parentId;
       await uploadFilesToParent(e.dataTransfer.files, uploadTargetId);
       return;
     }
 
-    // 2. 内部节点拖拽修改上级目录（支持笔记、Markdown、Word、Excel、目录）
     const sourceId = e.dataTransfer.getData(NODE_DRAG_MIME) || dragNodeId;
     setDragNodeId(null);
     if (!sourceId || sourceId === targetItem.id) return;
@@ -255,7 +300,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
       if (!expandedIds[targetItem.id]) toggleExpand(targetItem.id);
       await loadTree();
     } catch (err) {
-      alert(err instanceof Error ? err.message : '移动节点失败');
+      showToast(err instanceof Error ? err.message : '移动节点失败');
     }
   };
 
@@ -278,15 +323,15 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
       await api.moveNode(sourceId, { newParentId: null });
       await loadTree();
     } catch (err) {
-      alert(err instanceof Error ? err.message : '移至根目录失败');
+      showToast(err instanceof Error ? err.message : '移至根目录失败');
     }
   };
 
   const openContextMenu = (e: React.MouseEvent, node: NodeTreeItem | null) => {
     e.preventDefault();
     e.stopPropagation();
-    const menuWidth = 188;
-    const menuHeight = node ? 250 : 185;
+    const menuWidth = 192;
+    const menuHeight = node ? 256 : 190;
     const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8);
     const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8);
     setContextMenu({ x: Math.max(8, x), y: Math.max(8, y), node });
@@ -332,9 +377,9 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           onContextMenu={(e) => openContextMenu(e, item)}
           onClick={() => selectNode(item.id)}
           style={{ paddingLeft: `${depth * 16 + 10}px` }}
-          className={`group flex items-center gap-1.5 ${
+          className={`group relative flex items-center gap-1.5 ${
             touchFriendly ? 'py-2.5 text-sm' : 'py-1.5 text-[13.5px]'
-          } pr-2 cursor-pointer rounded-md mx-1.5 select-none transition-colors ${
+          } pr-2 cursor-pointer rounded-md mx-1.5 select-none transition-colors overflow-hidden ${
             isActive
               ? 'bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-200 font-semibold'
               : 'hover:bg-slate-200/60 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
@@ -352,7 +397,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
               e.stopPropagation();
               toggleExpand(item.id);
             }}
-            className="w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-700"
+            className="w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-700 shrink-0"
             title={isExpanded ? '折叠子级' : '展开子级'}
           >
             {hasChildren || item.nodeType === 'folder' ? (
@@ -367,13 +412,20 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           </button>
 
           <NodeIcon type={item.nodeType} />
-          <span className="truncate flex-1">{item.title}</span>
+          <span className="truncate flex-1 min-w-0">{item.title}</span>
           {item.isPinned && <Pin className="w-3 h-3 text-amber-500 shrink-0" />}
 
+          {/* 绝对定位悬浮操作栏：彻底消除悬停时挤占宽度的页面抖动 */}
           <div
-            className={`${
-              touchFriendly && isActive ? 'flex' : 'hidden group-hover:flex'
-            } items-center gap-0.5 shrink-0`}
+            className={`absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 pl-3 pr-1 py-0.5 rounded-md transition-opacity ${
+              isActive
+                ? 'bg-blue-100/95 dark:bg-blue-900/95'
+                : 'bg-slate-200/95 dark:bg-slate-800/95'
+            } ${
+              touchFriendly && isActive
+                ? 'opacity-100 pointer-events-auto'
+                : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
+            }`}
           >
             <button
               type="button"
@@ -381,7 +433,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                 e.stopPropagation();
                 void handleCreate('note', item.id);
               }}
-              className="p-0.5 rounded hover:bg-slate-300/60 dark:hover:bg-slate-700"
+              className="p-1 rounded hover:bg-slate-300/70 dark:hover:bg-slate-700"
               title="新建子笔记"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -392,7 +444,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                 e.stopPropagation();
                 triggerUpload(item.id);
               }}
-              className="p-0.5 rounded hover:bg-slate-300/60 dark:hover:bg-slate-700"
+              className="p-1 rounded hover:bg-slate-300/70 dark:hover:bg-slate-700"
               title="上传文档到此节点下"
             >
               <Upload className="w-3.5 h-3.5" />
@@ -401,9 +453,9 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                void handleDelete(item.id, item.title);
+                setDeleteTarget({ id: item.id, title: item.title });
               }}
-              className="p-0.5 rounded hover:bg-red-100 text-slate-400 hover:text-red-600"
+              className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-950/60 text-slate-500 hover:text-red-600"
               title="移至回收站"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -456,7 +508,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           <button
             type="button"
             onClick={() => void handleCreate('folder')}
-            className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100"
+            className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700"
             title={`在「${activeCreateTarget.label}」下新建子目录`}
           >
             <FolderPlus className="w-3.5 h-3.5" />
@@ -466,7 +518,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
             type="button"
             disabled={uploading}
             onClick={() => triggerUpload()}
-            className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 disabled:opacity-50"
+            className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50"
             title={`上传文档到「${activeCreateTarget.label}」`}
           >
             <Upload className="w-3.5 h-3.5" />
@@ -474,7 +526,6 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           </button>
         </div>
 
-        {/* 显示当前新建/上传的目标位置 */}
         <div className="flex items-center justify-between text-[11px] text-slate-500 px-0.5">
           <span className="truncate">
             新建位置：<strong className="text-slate-700 dark:text-slate-300">{activeCreateTarget.label}</strong>
@@ -483,7 +534,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
             <button
               type="button"
               onClick={() => selectNode(null)}
-              className="text-blue-600 hover:underline shrink-0 ml-1"
+              className="text-blue-600 dark:text-blue-400 hover:underline shrink-0 ml-1"
             >
               回到根目录
             </button>
@@ -491,7 +542,12 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         </div>
       </div>
 
-      {/* 拖拽节点时显示「移至根目录」快捷接收区 */}
+      {toastMsg && (
+        <div className="mx-2 mt-2 px-2.5 py-1.5 text-xs rounded-md bg-blue-50 dark:bg-blue-950/70 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+          {toastMsg}
+        </div>
+      )}
+
       {dragNodeId && (
         <div
           onDragOver={(e) => {
@@ -510,9 +566,9 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         </div>
       )}
 
-      {/* 无限层级目录树（支持右键菜单、外部文件拖入上传、内部节点拖拽换父级） */}
+      {/* 无限层级目录树（tree-scroll 防止滚动条出现时抖动） */}
       <div
-        className={`flex-1 overflow-y-auto py-2 ${
+        className={`flex-1 overflow-y-auto overflow-x-hidden py-2 tree-scroll ${
           rootDropActive && !dragNodeId ? 'bg-emerald-50/50 dark:bg-emerald-950/20' : ''
         }`}
         onContextMenu={(e) => openContextMenu(e, null)}
@@ -537,9 +593,9 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         )}
       </div>
 
-      {/* 底部工具栏（已移除 OneNote 导入入口，退出登录增加确认） */}
+      {/* 底部工具栏 */}
       <div className="p-2.5 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
-        <span className="text-[11px] text-slate-400">右键目录可管理 · 支持拖入上传</span>
+        <span className="text-[11px] text-slate-400">F2 重命名 · 拖入文件上传</span>
 
         <div className="flex items-center gap-1">
           <button
@@ -552,7 +608,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           </button>
           <button
             type="button"
-            onClick={handleLogout}
+            onClick={() => setLogoutConfirmOpen(true)}
             className="p-1.5 rounded hover:bg-red-50 hover:text-red-600 dark:hover:bg-slate-800"
             title="退出登录"
           >
@@ -566,7 +622,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         <div
           style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
           onClick={(e) => e.stopPropagation()}
-          className="fixed z-50 w-48 py-1 rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-700 dark:text-slate-200"
+          className="fixed z-50 w-48 py-1 rounded-lg shadow-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-700 dark:text-slate-200"
         >
           {contextMenu.node ? (
             <>
@@ -612,12 +668,15 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                 onClick={() => {
                   const n = contextMenu.node!;
                   setContextMenu(null);
-                  void handleRename(n);
+                  setRenameTarget({ id: n.id, title: n.title });
                 }}
-                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800"
               >
-                <Edit3 className="w-3.5 h-3.5" />
-                重命名
+                <span className="flex items-center gap-2">
+                  <Edit3 className="w-3.5 h-3.5" />
+                  重命名
+                </span>
+                <kbd className="text-[10px] text-slate-400">F2</kbd>
               </button>
               <button
                 type="button"
@@ -651,7 +710,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                 onClick={() => {
                   const n = contextMenu.node!;
                   setContextMenu(null);
-                  void handleDelete(n.id, n.title);
+                  setDeleteTarget({ id: n.id, title: n.title });
                 }}
                 className="w-full px-3 py-1.5 flex items-center gap-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
               >
@@ -719,6 +778,38 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           )}
         </div>
       )}
+
+      {/* 美化版自定义弹窗 */}
+      <RenameDialog
+        open={Boolean(renameTarget)}
+        initialValue={renameTarget?.title ?? ''}
+        title="重命名节点"
+        onConfirm={handleConfirmRename}
+        onCancel={() => setRenameTarget(null)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        title="移至回收站"
+        description={`确定要将「${deleteTarget?.title ?? ''}」及其全部子项移入回收站吗？`}
+        confirmText="确认移入"
+        danger
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
+
+      <ConfirmDialog
+        open={logoutConfirmOpen}
+        title="退出登录"
+        description="确定要退出当前账号吗？未同步的草稿建议先点击顶栏「手动同步」。"
+        confirmText="退出登录"
+        danger
+        onConfirm={() => {
+          setLogoutConfirmOpen(false);
+          setUser(null, null);
+        }}
+        onCancel={() => setLogoutConfirmOpen(false)}
+      />
     </aside>
   );
 };

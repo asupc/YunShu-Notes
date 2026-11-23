@@ -232,6 +232,22 @@ export const api = {
   getMigrationJob: (jobId: string) =>
     request<{ job: ImportJobState }>(`/api/v1/migrations/${jobId}`),
 
+  uploadImage: async (file: File): Promise<{ ok: boolean; fileName: string; url: string }> => {
+    const token = getToken();
+    const headers: Record<string, string> = {
+      'Content-Type': file.type || 'image/png',
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${getApiBase()}/api/v1/assets/image`, {
+      method: 'POST',
+      headers,
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data as { error?: string }).error ?? '图片上传失败');
+    return data as { ok: boolean; fileName: string; url: string };
+  },
+
   pauseMigrationJob: (jobId: string) =>
     request<{ ok: boolean }>(`/api/v1/migrations/${jobId}/pause`, { method: 'POST' }),
 };

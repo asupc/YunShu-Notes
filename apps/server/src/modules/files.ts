@@ -63,6 +63,57 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  // 0.5 笔记内嵌图片永久存储与访问端点（SHA-256 去重，不随短时签名过期）
+  app.post('/api/v1/assets/image', async (req, reply) => {
+    const auth = await requireAuth(req, reply);
+    if (!auth) return;
+    const contentType = String(req.headers['content-type'] ?? 'image/png').split(';')[0].trim().toLowerCase();
+    const extMap: Record<string, string> = {
+      'image/png': 'png',
+      'image/jpeg': 'jpg',
+      'image/jpg': 'jpg',
+      'image/webp': 'webp',
+      'image/gif': 'gif',
+      'image/svg+xml': 'svg',
+    };
+    const ext = extMap[contentType];
+    if (!ext) return reply.code(400).send({ error: '仅支持 PNG/JPG/WebP/GIF/SVG 图片格式' });
+
+    const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body ?? ''));
+    if (buf.length === 0) return reply.code(400).send({ error: '图片内容为空' });
+    const hash = crypto.createHash('sha256').update(buf).digest('hex');
+    const fileName = `${hash}.${ext}`;
+    await writeStorageFile(`assets/${fileName}`, buf);
+    return {
+      ok: true,
+      fileName,
+      url: `${requestBase(req)}/api/v1/assets/${fileName}`,
+    };
+  });
+
+  app.get('/api/v1/assets/:fileName', async (req, reply) => {
+    const { fileName } = req.params as { fileName: string };
+    if (!/^[a-f0-9]{64}\.(png|jpg|webp|gif|svg)$/.test(fileName)) {
+      return reply.code(400).send({ error: '非法图片文件名' });
+    }
+    try {
+      const buf = await readStorageFile(`assets/${fileName}`);
+      const ext = fileName.split('.').pop();
+      const mimeMap: Record<string, string> = {
+        png: 'image/png',
+        jpg: 'image/jpeg',
+        webp: 'image/webp',
+        gif: 'image/gif',
+        svg: 'image/svg+xml',
+      };
+      reply.header('Cache-Control', 'public, max-age=31536000, immutable');
+      reply.type(mimeMap[ext ?? 'png'] ?? 'image/png');
+      return reply.send(buf);
+    } catch {
+      return reply.code(404).send({ error: '图片不存在' });
+    }
+  });
+
   // 1. 申请上传链接（支持 SHA-256 秒传去重）
   const presignSchema = z.object({
     nodeId: z.string().uuid(),
