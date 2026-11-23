@@ -3,3 +3,6 @@
 *.bat text eol=crlf
 *.ps1 text eol=crlf
 *.cmd text eol=crlf
+
+# Shell 脚本必须使用 LF 换行（CRLF 会让 bash 的 shebang / set -e 行解析失败）。
+*.sh text eol=lf
