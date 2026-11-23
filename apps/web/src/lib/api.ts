@@ -8,74 +8,7 @@ import type {
   UserProfile,
 } from '@yunshu/shared';
 
-const API_BASE_STORAGE_KEY = 'yunshu_api_base';
-const DEFAULT_API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/+$/, '');
-
-/**
- * 规范化用户填写的服务端地址：
- * - 自动补全 https://
- * - 去掉末尾斜杠
- * - 校验必须是 http/https
- */
-export function normalizeApiBase(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return '';
-  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  let parsed: URL;
-  try {
-    parsed = new URL(withScheme);
-  } catch {
-    throw new Error('服务器地址格式不正确');
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('服务器地址必须以 http:// 或 https:// 开头');
-  }
-  const pathname = parsed.pathname.replace(/\/+$/, '');
-  return `${parsed.origin}${pathname === '/' ? '' : pathname}`;
-}
-
-/** 当前生效的 API 根地址；空字符串表示与页面同源（Web 部署模式） */
-export function getApiBase(): string {
-  try {
-    const saved = localStorage.getItem(API_BASE_STORAGE_KEY);
-    if (saved !== null) return saved;
-  } catch {
-    /* localStorage 不可用时回退到默认值 */
-  }
-  return DEFAULT_API_BASE;
-}
-
-/** 保存用户填写的服务端地址；传空字符串则清除并回到默认值 */
-export function setApiBase(value: string): void {
-  const normalized = normalizeApiBase(value);
-  try {
-    if (normalized) localStorage.setItem(API_BASE_STORAGE_KEY, normalized);
-    else localStorage.removeItem(API_BASE_STORAGE_KEY);
-  } catch {
-    /* ignore */
-  }
-}
-
-/** 登录前检测服务端是否可达（调用 /api/health） */
-export async function testApiBase(value: string): Promise<{ status: string; service?: string }> {
-  const base = normalizeApiBase(value);
-  if (!base) throw new Error('请先填写服务器地址');
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 6000);
-  try {
-    const res = await fetch(`${base}/api/health`, { signal: controller.signal });
-    const data = (await res.json().catch(() => ({}))) as { status?: string; service?: string; error?: string };
-    if (!res.ok) throw new Error(data.error ?? `连接失败（HTTP ${res.status}）`);
-    return { status: data.status ?? 'ok', service: data.service };
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new Error('连接超时，请检查地址和网络');
-    }
-    throw err instanceof Error ? err : new Error('连接失败');
-  } finally {
-    window.clearTimeout(timer);
-  }
-}
+const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 
 function getToken(): string | null {
   return localStorage.getItem('yunshu_token');
@@ -94,7 +27,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${getApiBase()}${path}`, { ...init, headers });
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error((data as { error?: string }).error ?? `请求失败（HTTP ${res.status}）`);

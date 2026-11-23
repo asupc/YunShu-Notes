@@ -79,8 +79,7 @@ export const App: React.FC = () => {
           >
             <PanelLeft className="w-4 h-4" />
           </button>
-          <img src="/logo-192.png" alt="云树笔记" className="w-5 h-5 rounded" />
-          <span className="text-sm font-bold text-slate-900 dark:text-slate-100">云树笔记</span>
+          <span className="text-sm font-bold text-blue-700 dark:text-blue-400">云树笔记</span>
           {activeNode && (
             <>
               <span className="text-slate-300">/</span>
