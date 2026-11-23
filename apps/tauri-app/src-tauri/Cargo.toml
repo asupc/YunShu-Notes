@@ -16,10 +16,32 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["full"] }
+# 业务代码没有直接使用 tokio，Tauri / reqwest 会按需启用运行时特性；
+# 原先声明 features = ["full"] 会把 process/signal/macros 等无用模块编进 .so
 # Android 交叉编译没有系统 OpenSSL，统一使用 rustls（桌面端同样可用）
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# 未使用流式下载（bytes_stream），去掉 stream 特性以精简 futures-util / tokio-util
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sha2 = "0.10"
 hex = "0.4"
 notify = "6"
-zip = "2"
+# .onepkg 只按标准 ZIP（store / deflate）读取；默认特性会额外编入
+# bzip2 / zstd / xz / deflate64 / AES，几 MB 的无用原生代码
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Android APK / Windows exe 体积优化（release 构建，参照 terminal-buddy 的发布配置）：
+# - strip：移除 .symtab/.strtab（实测约 5MB，Tauri 的 Gradle 插件不会自动剥离）
+# - opt-level="z" + lto + codegen-units=1：删除未使用的泛型/内联代码
+# - panic="abort"：省去展开表（.eh_frame / .gcc_except_table 约占 1.3MB）
+# 实测 v1.0.2：arm64 APK 17.0MB → 4.9MB；Windows exe 14MB → 4.66MB
+# 注意：JNI 导出符号在 .dynsym 中，不受 strip 影响
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+panic = "abort"
+strip = "symbols"
+
+# 参照 terminal-buddy：proc-macro（tauri-codegen 的 Brotli 前端资源压缩）在
+# opt-level=0 下执行很慢，单独提到 2 可显著缩短 release 构建时间（不影响产物大小）
+[profile.release.build-override]
+opt-level = 2
