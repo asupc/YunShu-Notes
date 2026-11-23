@@ -382,7 +382,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           } pr-2 cursor-pointer rounded-md mx-1.5 select-none transition-colors overflow-hidden ${
             isActive
               ? 'bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-200 font-semibold'
-              : 'hover:bg-slate-200/60 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
+              : 'hover:bg-slate-200/60 dark:hover:bg-neutral-900 text-slate-700 dark:text-slate-300'
           } ${
             isDropTarget
               ? dropMode === 'upload'
@@ -420,7 +420,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
             className={`absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 pl-3 pr-1 py-0.5 rounded-md transition-opacity ${
               isActive
                 ? 'bg-blue-100/95 dark:bg-blue-900/95'
-                : 'bg-slate-200/95 dark:bg-slate-800/95'
+                : 'bg-slate-200/95 dark:bg-neutral-900/95'
             } ${
               touchFriendly && isActive
                 ? 'opacity-100 pointer-events-auto'
@@ -433,7 +433,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                 e.stopPropagation();
                 void handleCreate('note', item.id);
               }}
-              className="p-1 rounded hover:bg-slate-300/70 dark:hover:bg-slate-700"
+              className="p-1 rounded hover:bg-slate-300/70 dark:hover:bg-neutral-800"
               title="新建子笔记"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -444,7 +444,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                 e.stopPropagation();
                 triggerUpload(item.id);
               }}
-              className="p-1 rounded hover:bg-slate-300/70 dark:hover:bg-slate-700"
+              className="p-1 rounded hover:bg-slate-300/70 dark:hover:bg-neutral-800"
               title="上传文档到此节点下"
             >
               <Upload className="w-3.5 h-3.5" />
@@ -471,7 +471,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
   };
 
   return (
-    <aside className="w-full h-full flex flex-col border-r border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+    <aside className="w-full h-full flex flex-col border-r border-slate-200 dark:border-neutral-800 bg-slate-50 dark:bg-black">
       <input
         ref={fileInputRef}
         type="file"
@@ -482,17 +482,17 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
       />
 
       {/* 顶部搜索与新建操作区 */}
-      <div className="p-3 space-y-2 border-b border-slate-200 dark:border-slate-800">
+      <div className="p-3 space-y-2 border-b border-slate-200 dark:border-neutral-800">
         <button
           type="button"
           onClick={() => setSearchOpen(true)}
-          className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs text-slate-500 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md hover:border-blue-400"
+          className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs text-slate-500 bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 rounded-md hover:border-blue-400"
         >
           <span className="flex items-center gap-1.5">
             <Search className="w-3.5 h-3.5" />
             全局搜索笔记与文档...
           </span>
-          <kbd className="px-1 py-0.5 text-[10px] bg-slate-100 dark:bg-slate-700 rounded">Ctrl+K</kbd>
+          <kbd className="px-1 py-0.5 text-[10px] bg-slate-100 dark:bg-neutral-800 rounded">Ctrl+K</kbd>
         </button>
 
         <div className="grid grid-cols-3 gap-1.5">
@@ -508,7 +508,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           <button
             type="button"
             onClick={() => void handleCreate('folder')}
-            className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700"
+            className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-800"
             title={`在「${activeCreateTarget.label}」下新建子目录`}
           >
             <FolderPlus className="w-3.5 h-3.5" />
@@ -518,7 +518,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
             type="button"
             disabled={uploading}
             onClick={() => triggerUpload()}
-            className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50"
+            className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-800 disabled:opacity-50"
             title={`上传文档到「${activeCreateTarget.label}」`}
           >
             <Upload className="w-3.5 h-3.5" />
@@ -559,7 +559,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           className={`mx-2 mt-2 py-1.5 px-2 text-center text-xs rounded-md border border-dashed transition-colors ${
             rootDropActive
               ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
-              : 'border-slate-300 text-slate-500 dark:border-slate-700'
+              : 'border-slate-300 text-slate-500 dark:border-neutral-800'
           }`}
         >
           拖到此处移至根目录
@@ -594,14 +594,14 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
       </div>
 
       {/* 底部工具栏 */}
-      <div className="p-2.5 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
+      <div className="p-2.5 border-t border-slate-200 dark:border-neutral-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
         <span className="text-[11px] text-slate-400">F2 重命名 · 拖入文件上传</span>
 
         <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
-            className="p-1.5 rounded hover:bg-slate-200/70 dark:hover:bg-slate-800"
+            className="p-1.5 rounded hover:bg-slate-200/70 dark:hover:bg-neutral-900"
             title="切换浅色/深色主题"
           >
             {theme === 'light' ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
@@ -609,7 +609,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           <button
             type="button"
             onClick={() => setLogoutConfirmOpen(true)}
-            className="p-1.5 rounded hover:bg-red-50 hover:text-red-600 dark:hover:bg-slate-800"
+            className="p-1.5 rounded hover:bg-red-50 hover:text-red-600 dark:hover:bg-neutral-900"
             title="退出登录"
           >
             <LogOut className="w-3.5 h-3.5" />
@@ -622,7 +622,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         <div
           style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
           onClick={(e) => e.stopPropagation()}
-          className="fixed z-50 w-48 py-1 rounded-lg shadow-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-700 dark:text-slate-200"
+          className="fixed z-50 w-48 py-1 rounded-lg shadow-xl border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 text-xs text-slate-700 dark:text-slate-200"
         >
           {contextMenu.node ? (
             <>
@@ -633,7 +633,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                   setContextMenu(null);
                   void handleCreate('note', n.id);
                 }}
-                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
                 <Plus className="w-3.5 h-3.5 text-blue-600" />
                 新建子笔记
@@ -645,7 +645,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                   setContextMenu(null);
                   void handleCreate('folder', n.id);
                 }}
-                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
                 <FolderPlus className="w-3.5 h-3.5 text-slate-500" />
                 新建子目录
@@ -657,12 +657,12 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                   setContextMenu(null);
                   triggerUpload(n.id);
                 }}
-                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
                 <Upload className="w-3.5 h-3.5 text-emerald-600" />
                 上传文档到此目录
               </button>
-              <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+              <div className="my-1 border-t border-slate-100 dark:border-neutral-800" />
               <button
                 type="button"
                 onClick={() => {
@@ -670,7 +670,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                   setContextMenu(null);
                   setRenameTarget({ id: n.id, title: n.title });
                 }}
-                className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="w-full px-3 py-1.5 flex items-center justify-between hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
                 <span className="flex items-center gap-2">
                   <Edit3 className="w-3.5 h-3.5" />
@@ -685,7 +685,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                   setContextMenu(null);
                   void handleTogglePin(n);
                 }}
-                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
                 <Pin className="w-3.5 h-3.5 text-amber-500" />
                 {contextMenu.node.isPinned ? '取消置顶' : '置顶节点'}
@@ -698,13 +698,13 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                     setContextMenu(null);
                     void handleMoveToRoot(n.id);
                   }}
-                  className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
                 >
                   <CornerLeftUp className="w-3.5 h-3.5" />
                   移至根目录
                 </button>
               )}
-              <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+              <div className="my-1 border-t border-slate-100 dark:border-neutral-800" />
               <button
                 type="button"
                 onClick={() => {
@@ -726,7 +726,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                   setContextMenu(null);
                   void handleCreate('note', null);
                 }}
-                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
                 <Plus className="w-3.5 h-3.5 text-blue-600" />
                 新建顶级笔记
@@ -737,7 +737,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                   setContextMenu(null);
                   void handleCreate('folder', null);
                 }}
-                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
                 <FolderPlus className="w-3.5 h-3.5 text-slate-500" />
                 新建顶级目录
@@ -748,19 +748,19 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                   setContextMenu(null);
                   triggerUpload(null);
                 }}
-                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
                 <Upload className="w-3.5 h-3.5 text-emerald-600" />
                 上传文档到根目录
               </button>
-              <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+              <div className="my-1 border-t border-slate-100 dark:border-neutral-800" />
               <button
                 type="button"
                 onClick={() => {
                   setContextMenu(null);
                   setAllExpanded(true);
                 }}
-                className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
                 全部展开目录
               </button>
@@ -770,7 +770,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                   setContextMenu(null);
                   setAllExpanded(false);
                 }}
-                className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
                 全部折叠目录
               </button>

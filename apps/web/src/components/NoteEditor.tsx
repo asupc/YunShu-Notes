@@ -176,7 +176,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
   const inTable = Boolean(editor?.isActive('table'));
 
   return (
-    <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden bg-white dark:bg-slate-950">
+    <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden bg-white dark:bg-black">
       <input
         ref={imageInputRef}
         type="file"
@@ -187,12 +187,12 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
       />
 
       {/* 顶部格式工具栏（含插入图片、表格与行列操作） */}
-      <div className="px-3 sm:px-5 py-2 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 bg-white dark:bg-slate-950 shrink-0">
+      <div className="px-3 sm:px-5 py-2 border-b border-slate-200 dark:border-neutral-800 flex items-center justify-between gap-2 bg-white dark:bg-black shrink-0">
         <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
           <button
             type="button"
             onClick={() => editor?.chain().focus().toggleHeading({ level: 1 }).run()}
-            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-neutral-900 shrink-0"
             title="一级标题"
           >
             <Heading1 className="w-4 h-4" />
@@ -200,7 +200,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           <button
             type="button"
             onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()}
-            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-neutral-900 shrink-0"
             title="二级标题"
           >
             <Heading2 className="w-4 h-4" />
@@ -208,7 +208,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           <button
             type="button"
             onClick={() => editor?.chain().focus().toggleBold().run()}
-            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-neutral-900 shrink-0"
             title="加粗"
           >
             <Bold className="w-4 h-4" />
@@ -216,7 +216,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           <button
             type="button"
             onClick={() => editor?.chain().focus().toggleItalic().run()}
-            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-neutral-900 shrink-0"
             title="斜体"
           >
             <Italic className="w-4 h-4" />
@@ -224,7 +224,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           <button
             type="button"
             onClick={() => editor?.chain().focus().toggleBulletList().run()}
-            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-neutral-900 shrink-0"
             title="无序列表"
           >
             <List className="w-4 h-4" />
@@ -232,7 +232,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           <button
             type="button"
             onClick={() => editor?.chain().focus().toggleTaskList().run()}
-            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-neutral-900 shrink-0"
             title="待办清单"
           >
             <CheckSquare className="w-4 h-4" />
@@ -240,7 +240,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           <button
             type="button"
             onClick={() => editor?.chain().focus().toggleCodeBlock().run()}
-            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-neutral-900 shrink-0"
             title="代码块"
           >
             <Code className="w-4 h-4" />
@@ -249,7 +249,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
             type="button"
             disabled={uploadingImg}
             onClick={() => imageInputRef.current?.click()}
-            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0 disabled:opacity-50"
+            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-neutral-900 shrink-0 disabled:opacity-50"
             title="插入图片（也可直接 Ctrl+V 粘贴或拖入）"
           >
             <ImageIcon className="w-4 h-4" />
@@ -257,39 +257,39 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           <button
             type="button"
             onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
-            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+            className="p-2 sm:p-1.5 rounded hover:bg-slate-100 dark:hover:bg-neutral-900 shrink-0"
             title="插入表格 (3x3)"
           >
             <TableIcon className="w-4 h-4" />
           </button>
 
           {inTable && (
-            <div className="flex items-center gap-1 ml-1 pl-2 border-l border-slate-200 dark:border-slate-700 text-xs shrink-0">
+            <div className="flex items-center gap-1 ml-1 pl-2 border-l border-slate-200 dark:border-neutral-800 text-xs shrink-0">
               <button
                 type="button"
                 onClick={() => editor?.chain().focus().addRowAfter().run()}
-                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
+                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-neutral-900 hover:bg-slate-200 dark:hover:bg-neutral-800"
               >
                 +行
               </button>
               <button
                 type="button"
                 onClick={() => editor?.chain().focus().deleteRow().run()}
-                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
+                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-neutral-900 hover:bg-slate-200 dark:hover:bg-neutral-800"
               >
                 -行
               </button>
               <button
                 type="button"
                 onClick={() => editor?.chain().focus().addColumnAfter().run()}
-                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
+                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-neutral-900 hover:bg-slate-200 dark:hover:bg-neutral-800"
               >
                 +列
               </button>
               <button
                 type="button"
                 onClick={() => editor?.chain().focus().deleteColumn().run()}
-                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700"
+                className="px-1.5 py-1 rounded bg-slate-100 dark:bg-neutral-900 hover:bg-slate-200 dark:hover:bg-neutral-800"
               >
                 -列
               </button>
@@ -318,7 +318,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           <button
             type="button"
             onClick={handleExportMarkdown}
-            className="flex items-center gap-1 px-2 py-1 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
+            className="flex items-center gap-1 px-2 py-1 rounded border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-900 whitespace-nowrap"
           >
             <Download className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">导出 MD</span>

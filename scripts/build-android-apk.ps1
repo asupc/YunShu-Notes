@@ -480,6 +480,15 @@ if [ ! -d src-tauri/gen/android ]; then
     tauri android init --ci --skip-targets-install
 fi
 
+if [ -f /tmp/app/apps/tauri-app/logo-source-1024.png ]; then
+    log "同步与 PC 端一致的云树笔记应用图标到 Android 工程"
+    tauri icon /tmp/app/apps/tauri-app/logo-source-1024.png
+    BG_XML="src-tauri/gen/android/app/src/main/res/values/ic_launcher_background.xml"
+    if [ -f "$BG_XML" ]; then
+        sed -i 's|<color name="ic_launcher_background">[^<]*</color>|<color name="ic_launcher_background">#000000</color>|g' "$BG_XML"
+    fi
+fi
+
 if [ "$BUILD_KIND" = "release" ]; then
     if [ -f /keystore-out/keystore.properties ]; then
         cp /keystore-out/keystore.properties src-tauri/gen/android/keystore.properties

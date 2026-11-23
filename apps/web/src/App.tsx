@@ -134,16 +134,16 @@ export const App: React.FC = () => {
     <div
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
-      className="h-[100dvh] flex flex-col overflow-hidden bg-white dark:bg-slate-950 safe-area-shell"
+      className="h-[100dvh] flex flex-col overflow-hidden bg-white dark:bg-black safe-area-shell"
     >
       {/* 顶部全局导航栏（含手动同步按钮与上次同步时间） */}
-      <header className="h-11 shrink-0 px-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 bg-slate-50/80 dark:bg-slate-900">
+      <header className="h-11 shrink-0 px-3 border-b border-slate-200 dark:border-neutral-800 flex items-center justify-between gap-2 bg-slate-50/80 dark:bg-black">
         <div className="flex items-center gap-2 min-w-0">
           {isSplitLayout ? (
             <button
               type="button"
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="inline-flex items-center justify-center p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800"
+              className="inline-flex items-center justify-center p-1.5 rounded hover:bg-slate-200 dark:hover:bg-neutral-900"
               title="展开/收起左侧目录树 (Ctrl+\)"
             >
               <PanelLeft className="w-4 h-4" />
@@ -152,7 +152,7 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={() => setMobileDrawerOpen(!mobileDrawerOpen)}
-              className="inline-flex items-center justify-center p-2 -ml-1 rounded hover:bg-slate-200 dark:hover:bg-slate-800"
+              className="inline-flex items-center justify-center p-2 -ml-1 rounded hover:bg-slate-200 dark:hover:bg-neutral-900"
               title="打开目录树"
             >
               <Menu className="w-4 h-4" />
@@ -186,7 +186,7 @@ export const App: React.FC = () => {
             type="button"
             disabled={syncing}
             onClick={() => void manualSync()}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 disabled:opacity-60"
+            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 text-slate-700 dark:text-slate-200 disabled:opacity-60"
             title="立即手动同步当前笔记与目录树"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin text-blue-600' : ''}`} />

@@ -69,8 +69,8 @@ export const AuthScreen: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-4">
-      <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-8 shadow-sm">
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-black p-4">
+      <div className="w-full max-w-md bg-white dark:bg-neutral-950 border border-slate-200 dark:border-neutral-800 rounded-xl p-8 shadow-sm">
         <div className="mb-6">
           <img src="/logo-192.png" alt="云树笔记" className="w-12 h-12 rounded-xl mb-3 shadow-sm" />
           <div className="text-xs font-semibold text-blue-600 mb-1">云树笔记 · 跨端无限层级知识库</div>
@@ -88,7 +88,7 @@ export const AuthScreen: React.FC = () => {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {tauriRuntime && (
-            <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 p-3">
+            <div className="rounded-lg border border-slate-200 dark:border-neutral-800 bg-slate-50/70 dark:bg-neutral-900/70 p-3">
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                   服务端地址
@@ -110,7 +110,7 @@ export const AuthScreen: React.FC = () => {
                   setServerStatus('');
                 }}
                 placeholder="https://your-server.example.com"
-                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-800 font-mono"
+                className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-neutral-800 rounded-md bg-white dark:bg-neutral-900 font-mono"
               />
               <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
                 填写服务端地址（需以 http:// 或 https:// 开头）；手机端建议使用 https:// 域名地址。
@@ -137,7 +137,7 @@ export const AuthScreen: React.FC = () => {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="name@example.com"
-              className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-800"
+              className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-neutral-800 rounded-md bg-white dark:bg-neutral-900"
             />
           </div>
 
@@ -152,7 +152,7 @@ export const AuthScreen: React.FC = () => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="至少 6 位密码"
-              className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-slate-700 rounded-md bg-white dark:bg-slate-800"
+              className="w-full px-3 py-2 text-sm border border-slate-300 dark:border-neutral-800 rounded-md bg-white dark:bg-neutral-900"
             />
           </div>
 
