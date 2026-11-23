@@ -1,0 +1,12 @@
+node_modules
+**/node_modules
+**/dist
+**/tsconfig.tsbuildinfo
+apps/tauri-app
+apps/web
+.git
+docs
+data
+*.log
+.env
+.deploy-*
