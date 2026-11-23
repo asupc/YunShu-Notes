@@ -1,0 +1,22 @@
+{
+  "name": "yunshu-notes",
+  "version": "1.1.0",
+  "private": true,
+  "description": "云树笔记 — 跨端无限层级笔记与 Office 文件管理平台（SQLite 轻量单机/自建版）",
+  "workspaces": [
+    "packages/shared",
+    "apps/server",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev --workspace=@yunshu/server",
+    "dev:web": "npm run dev --workspace=@yunshu/web",
+    "build:shared": "npm run build --workspace=@yunshu/shared",
+    "build:server": "npm run build --workspace=@yunshu/server",
+    "build:web": "npm run build --workspace=@yunshu/web",
+    "build": "npm run build:shared && npm run build:server && npm run build:web"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

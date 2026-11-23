@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-canvas: #ffffff;
+  --bg-sidebar: #f8fafc;
+  --bg-hover: #f1f5f9;
+  --bg-active: #dbeafe;
+  --border-subtle: #e2e8f0;
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #475569;
+}
+
+[data-theme='dark'] {
+  --bg-canvas: #0f172a;
+  --bg-sidebar: #1e293b;
+  --bg-hover: #334155;
+  --bg-active: #1e3a8a;
+  --border-subtle: #334155;
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', -apple-system, sans-serif;
+}
+
+/* Tiptap 编辑器排版样式 */
+.ProseMirror {
+  outline: none;
+  min-height: 60vh;
+  line-height: 1.75;
+  font-size: 15px;
+}
+.ProseMirror h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  margin: 1.2rem 0 0.6rem;
+}
+.ProseMirror h2 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin: 1rem 0 0.5rem;
+}
+.ProseMirror ul {
+  list-style: disc;
+  padding-left: 1.5rem;
+}
+.ProseMirror ol {
+  list-style: decimal;
+  padding-left: 1.5rem;
+}
+.ProseMirror ul[data-type='taskList'] {
+  list-style: none;
+  padding-left: 0;
+}
+.ProseMirror ul[data-type='taskList'] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.ProseMirror pre {
+  background: #1e293b;
+  color: #f8fafc;
+  padding: 0.85rem 1rem;
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 13px;
+  overflow-x: auto;
+}
+.ProseMirror p.is-editor-empty:first-child::before {
+  color: #94a3b8;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}

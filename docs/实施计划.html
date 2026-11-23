@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跨端笔记平台工程级详细实施方案（V2.0）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --paper: #FFFFFF;
+  --ink: #0F172A;
+  --ink2: #334155;
+  --mute: #475569;
+  --hair: #CBD5E1;
+  --surface: #F8FAFC;
+  --accent: #2563EB;
+  --accent-text: #1E40AF;
+  --accent-2: #059669;
+  --accent-2-text: #065F46;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 56px clamp(20px, 8vw, 96px) 84px;
+  font-family: 'Plus Jakarta Sans', 'Noto Sans SC', -apple-system, sans-serif;
+  font-size: 15.5px;
+  line-height: 1.72;
+  color: var(--ink2);
+  background: var(--paper);
+}
+a { color: var(--accent-text); text-decoration: underline; text-underline-offset: 3px; }
+h1 {
+  margin: 0 0 14px;
+  font-size: clamp(30px, 3.6vw, 44px);
+  line-height: 1.2;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+.deck { margin: 0 0 32px; font-size: 16.5px; max-width: 72ch; color: var(--ink2); }
+h2 {
+  margin: 52px 0 16px;
+  padding-top: 24px;
+  border-top: 1px solid var(--hair);
+  font-size: clamp(22px, 2.2vw, 27px);
+  color: var(--ink);
+  letter-spacing: -0.015em;
+}
+h3 { margin: 26px 0 10px; font-size: 17px; color: var(--ink); }
+p { margin: 0 0 14px; max-width: 74ch; }
+ul, ol { margin: 0 0 16px; padding-left: 22px; max-width: 74ch; }
+li { margin-bottom: 8px; }
+code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  background: #F1F5F9;
+  color: var(--ink);
+  padding: 2px 5px;
+}
+pre {
+  margin: 14px 0 22px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border-left: 3px solid var(--accent);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink);
+  overflow-x: auto;
+}
+.table-wrap { width: 100%; overflow-x: auto; margin: 18px 0 24px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; text-align: left; }
+thead th {
+  font-family: 'JetBrains Mono', 'Noto Sans SC', monospace;
+  font-size: 12.5px;
+  color: var(--ink);
+  padding: 11px 12px 11px 0;
+  border-bottom: 2px solid var(--ink);
+  vertical-align: bottom;
+}
+tbody td {
+  padding: 12px 12px 12px 0;
+  border-bottom: 1px solid var(--hair);
+  vertical-align: top;
+  line-height: 1.55;
+}
+tbody td strong { color: var(--ink); }
+.callout {
+  margin: 20px 0;
+  padding: 14px 18px;
+  border-left: 4px solid var(--accent-2);
+  background: var(--surface);
+  max-width: 74ch;
+}
+.callout strong { color: var(--accent-2-text); }
+figure { margin: 24px 0; }
+figcaption { margin-top: 8px; font-size: 13px; color: var(--mute); }
+svg { display: block; width: 100%; height: auto; }
+.nowrap { white-space: nowrap; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>跨端笔记平台工程级详细实施方案（V2.0）</h1>
+    <p class="deck">面向服务端、Web、PC（Windows/macOS/Linux）与 Android 四端的完整落地规格书：包含 Monorepo 目录规范、PostgreSQL 完整 DDL 与 <code>ltree</code> 移动算法、REST/WebSocket 协议契约、PC 端 Rust Office 监听状态机、OneNote 双通道迁移算法、Docker Compose 生产配置与 W1–W16 周级研发排期。</p>
+  </header>
+
+  <h2>1. Monorepo 工程目录结构与技术栈锁定</h2>
+  <p>使用 <code>pnpm workspace</code> + <code>Turborepo</code> 管理单一代码仓库，前端 UI 组件、DTO 类型定义与树形算法在 Web、PC、Android 三端 100% 复用，原生文件监听与本地解析集中在 Tauri Rust 层。</p>
+  <pre>note-platform/
+├── apps/
+│   ├── web/                          # React 19 + Vite + Tailwind + Tiptap（Web/PC/Android 共享 UI）
+│   │   └── src/features/             # tree/ | editor/ | office/ | migration/ | search/
+│   ├── tauri-app/src-tauri/src/      # Tauri 2.0（Windows/macOS/Linux/Android 统一封装）
+│   │   ├── cache_db.rs               # 本地 SQLite 离线树元数据与 Yjs Update 队列
+│   │   ├── office_sync.rs            # 本机 Office 唤起、notify 目录监听、防抖 SHA-256 回传状态机
+│   │   └── onepkg_parser.rs          # 基于 onenote.rs 的本地 .onepkg 离线高速解析命令
+│   ├── server/src/                   # Node.js 22 + Fastify + Hocuspocus
+│   │   ├── modules/                  # auth/ | nodes/ | files/ | search/ | migration/
+│   │   └── ws/hocuspocus.ts          # Yjs CRDT WebSocket 实时同步与持久化钩子
+│   └── preview-worker/               # BullMQ + Redis + 无头 LibreOffice PDF 预览与纯文本抽取
+├── packages/
+│   ├── shared-types/                 # Zod Schema、REST/WS DTO、错误码枚举
+│   └── tree-utils/                   # Fractional Indexing（LexoRank）与树构建工具
+└── deploy/                           # docker-compose.yml + Caddyfile + backup.sh</pre>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:18%;">架构模块</th>
+          <th style="width:28%;">核心选型</th>
+          <th style="width:54%;">工程选型依据</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>前端 UI 与树组件</strong></td><td>React 19 + Zustand + <code>@dnd-kit/core</code></td><td>配合 <code>@tanstack/react-virtual</code> 支撑 5,000+ 节点流畅展开与拖拽。</td></tr>
+        <tr><td><strong>富文本与 Markdown</strong></td><td><a href="https://tiptap.dev/docs/editor/extensions/functionality/collaboration" target="_blank" rel="noopener noreferrer">Tiptap</a> + Yjs + <code>y-indexeddb</code></td><td>原生 Markdown 快捷键、表格、代码块、待办列表与离线无冲突合并。</td></tr>
+        <tr><td><strong>跨端桌面与移动</strong></td><td><a href="https://v2.tauri.app/" target="_blank" rel="noopener noreferrer">Tauri 2.0</a> + Rust</td><td>桌面安装包约 8 MB，直接调用 <a href="https://v2.tauri.app/zh-cn/plugin/opener/" target="_blank" rel="noopener noreferrer">tauri-plugin-opener</a> 唤起本机 Office；Android 复用同一前端。</td></tr>
+        <tr><td><strong>服务端与实时同步</strong></td><td>Fastify + <a href="https://github.com/ueberdosis/hocuspocus" target="_blank" rel="noopener noreferrer">Hocuspocus</a> + BullMQ</td><td>全栈 TypeScript 降低维护成本；Hocuspocus 处理 Yjs 增量合并与鉴权。</td></tr>
+        <tr><td><strong>数据库与对象存储</strong></td><td>PostgreSQL 16 (<a href="https://www.postgresql.org/docs/current/ltree.html" target="_blank" rel="noopener noreferrer">ltree</a>) + MinIO/S3</td><td>单库搞定无限层级树、乐观锁版本管理与中文全文搜索；二进制文件走对象存储。</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>2. 数据库完整 DDL 与无限层级树原子移动</h2>
+  <pre>CREATE EXTENSION IF NOT EXISTS ltree;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE nodes (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID NOT NULL,
+  parent_id       UUID REFERENCES nodes(id) ON DELETE CASCADE,
+  path            LTREE NOT NULL,            -- 例: root.n_9f1a.n_2b3c
+  rank            TEXT NOT NULL,             -- LexoRank 排序键，O(1) 拖拽插入
+  title           TEXT NOT NULL,
+  node_type       TEXT NOT NULL CHECK (node_type IN ('folder','note','markdown','docx','xlsx','pdf')),
+  yjs_state       BYTEA,                     -- note/markdown 节点的 Yjs 二进制合并快照
+  current_file_id UUID,                      -- 文件节点指向最新 node_files.id
+  current_version INT DEFAULT 1,             -- 文件乐观锁版本号
+  plain_text      TEXT DEFAULT '',           -- 抽取的纯文本（含 Office 文档内容）
+  is_deleted      BOOLEAN DEFAULT FALSE,
+  created_at      TIMESTAMPTZ DEFAULT now(),
+  updated_at      TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX idx_nodes_path_gist ON nodes USING GIST (path);
+CREATE INDEX idx_nodes_parent_rank ON nodes (user_id, parent_id, rank) WHERE is_deleted = FALSE;
+
+CREATE TABLE node_files (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  node_id         UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  version         INT NOT NULL,
+  file_name       TEXT NOT NULL,
+  mime_type       TEXT NOT NULL,
+  file_size       BIGINT NOT NULL,
+  sha256          CHAR(64) NOT NULL,
+  storage_key     TEXT NOT NULL,
+  preview_pdf_key TEXT,
+  preview_status  TEXT NOT NULL DEFAULT 'pending', -- pending | ready | failed
+  source_device   TEXT,
+  created_at      TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (node_id, version)
+);
+
+CREATE TABLE import_jobs (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID NOT NULL,
+  source_type     TEXT NOT NULL CHECK (source_type IN ('graph_api','onepkg_local')),
+  target_node_id  UUID REFERENCES nodes(id) ON DELETE SET NULL,
+  status          TEXT NOT NULL CHECK (status IN ('queued','running','paused','done','failed')),
+  total_pages     INT DEFAULT 0,
+  imported_pages  INT DEFAULT 0,
+  failed_pages    INT DEFAULT 0,
+  cursor_state    JSONB DEFAULT '{}'::jsonb,
+  error_log       JSONB DEFAULT '[]'::jsonb,
+  updated_at      TIMESTAMPTZ DEFAULT now()
+);</pre>
+
+  <h3>原子移动整棵子树 SQL（防循环引用）</h3>
+  <pre>-- 1. 前置校验：禁止移动到自身或其后代节点下
+SELECT 1 FROM nodes WHERE id = :newParentId AND path &lt;@ (SELECT path FROM nodes WHERE id = :nodeId);
+
+-- 2. 单条事务语句重写整棵子树 ltree 路径
+UPDATE nodes
+SET path = :newParentPath || subpath(path, nlevel(:oldPath) - 1),
+    parent_id = CASE WHEN id = :nodeId THEN :newParentId ELSE parent_id END,
+    rank = CASE WHEN id = :nodeId THEN :newRank ELSE rank END,
+    updated_at = now()
+WHERE user_id = :userId AND path &lt;@ :oldPath;</pre>
+
+  <h2>3. 服务端 REST API 与 WebSocket 协议契约</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:16%;">接口分组</th>
+          <th style="width:24%;">方法与路径</th>
+          <th style="width:30%;">核心参数 / 响应</th>
+          <th style="width:30%;">核心逻辑与异常保护</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>目录树同步</strong></td><td><code>GET /api/v1/nodes/tree</code></td><td>Query: <code>since</code>；返回 <code>NodeMeta[]</code></td><td>仅传元数据（不含正文），万级节点压缩后 &lt; 2 MB，支持差量同步。</td></tr>
+        <tr><td><strong>创建 / 移动</strong></td><td><code>POST /api/v1/nodes</code><br><code>PATCH /api/v1/nodes/:id/move</code></td><td><code>{ parentId, title, nodeType, prevRank, nextRank }</code></td><td>服务端计算 <code>ltree</code> 与中间 <code>rank</code>；移动前校验无环。</td></tr>
+        <tr><td><strong>预签名上传</strong></td><td><code>POST /api/v1/files/presign</code></td><td><code>{ nodeId, fileName, fileSize, sha256 }</code></td><td>先查 <code>sha256</code> 支持秒传去重，否则签发 10 分钟有效的 S3 PUT 链接。</td></tr>
+        <tr><td><strong>版本提交</strong></td><td><code>POST /api/v1/files/commit</code></td><td><code>{ nodeId, baseVersion, storageKey, sha256, deviceName }</code></td><td>校验 <code>current_version === baseVersion</code>；冲突返回 <code>409</code> 并创建冲突副本子节点。</td></tr>
+        <tr><td><strong>预览与下载</strong></td><td><code>GET /api/v1/nodes/:id/file-urls</code></td><td>返回 <code>downloadUrl, previewPdfUrl, previewStatus, version</code></td><td>签发 15 分钟有效的私有桶签名链接，保障文件不外泄。</td></tr>
+        <tr><td><strong>全局搜索</strong></td><td><code>GET /api/v1/search</code></td><td>Query: <code>q, types, rootId</code></td><td>联合命中标题、笔记正文与 Word/Excel 抽取文本，返回高亮片段与路径。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <strong>Hocuspocus 实时协同协议：</strong>WebSocket 房间名为 <code>node:&lt;uuid&gt;</code>，连接时在 <code>onAuthenticate</code> 校验 JWT 与节点归属；编辑停止 2 秒防抖后将合并后的 Yjs 二进制快照写回 <code>nodes.yjs_state</code>，并同步更新 <code>nodes.plain_text</code>。
+  </div>
+
+  <h2>4. PC 端 Rust 本地 Office 唤起与防抖自动回传状态机</h2>
+  <figure>
+    <svg viewBox="0 0 720 148" width="100%" role="img" aria-label="PC端本地Office唤起与防抖回传状态机">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1 L 10 5 L 0 9 z" fill="#2563EB"/>
+        </marker>
+      </defs>
+      <rect x="6" y="20" width="124" height="72" rx="4" fill="#F8FAFC" stroke="#2563EB" stroke-width="1.5"/>
+      <text x="68" y="48" text-anchor="middle" font-size="13" font-weight="700" fill="#1E40AF">1. 缓存校验</text>
+      <text x="68" y="68" text-anchor="middle" font-size="11.5" fill="#475569">SHA-256 比对</text>
+      <text x="68" y="83" text-anchor="middle" font-size="11.5" fill="#475569">缺失流式拉取</text>
+      <line x1="130" y1="56" x2="152" y2="56" stroke="#2563EB" stroke-width="1.5" marker-end="url(#arr)"/>
+
+      <rect x="154" y="20" width="126" height="72" rx="4" fill="#F8FAFC" stroke="#2563EB" stroke-width="1.5"/>
+      <text x="217" y="48" text-anchor="middle" font-size="13" font-weight="700" fill="#1E40AF">2. 唤起本机</text>
+      <text x="217" y="68" text-anchor="middle" font-size="11.5" fill="#475569">openPath() 启动</text>
+      <text x="217" y="83" text-anchor="middle" font-size="11.5" fill="#475569">Word/Excel/WPS</text>
+      <line x1="280" y1="56" x2="302" y2="56" stroke="#2563EB" stroke-width="1.5" marker-end="url(#arr)"/>
+
+      <rect x="304" y="20" width="134" height="72" rx="4" fill="#ECFDF5" stroke="#059669" stroke-width="1.5"/>
+      <text x="371" y="48" text-anchor="middle" font-size="13" font-weight="700" fill="#065F46">3. 目录监听</text>
+      <text x="371" y="68" text-anchor="middle" font-size="11.5" fill="#334155">过滤 ~$ 锁文件</text>
+      <text x="371" y="83" text-anchor="middle" font-size="11.5" fill="#334155">1200ms 防抖校验</text>
+      <line x1="438" y1="56" x2="460" y2="56" stroke="#2563EB" stroke-width="1.5" marker-end="url(#arr)"/>
+
+      <rect x="462" y="20" width="120" height="72" rx="4" fill="#F8FAFC" stroke="#2563EB" stroke-width="1.5"/>
+      <text x="522" y="48" text-anchor="middle" font-size="13" font-weight="700" fill="#1E40AF">4. 乐观锁回传</text>
+      <text x="522" y="68" text-anchor="middle" font-size="11.5" fill="#475569">PUT S3 新版本</text>
+      <text x="522" y="83" text-anchor="middle" font-size="11.5" fill="#475569">commit(baseVer)</text>
+      <line x1="582" y1="56" x2="604" y2="56" stroke="#2563EB" stroke-width="1.5" marker-end="url(#arr)"/>
+
+      <rect x="606" y="20" width="108" height="72" rx="4" fill="#F8FAFC" stroke="#2563EB" stroke-width="1.5"/>
+      <text x="660" y="48" text-anchor="middle" font-size="13" font-weight="700" fill="#1E40AF">5. 刷新预览</text>
+      <text x="660" y="68" text-anchor="middle" font-size="11.5" fill="#475569">异步重转 PDF</text>
+      <text x="660" y="83" text-anchor="middle" font-size="11.5" fill="#475569">更新全文索引</text>
+
+      <path d="M 522 92 V 126 H 386" fill="none" stroke="#D97706" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <text x="378" y="130" text-anchor="end" font-size="11.5" fill="#92400E">遇 409 版本冲突：自动创建「冲突副本」节点，绝不静默覆盖</text>
+    </svg>
+    <figcaption>PC 端本地 Office 唤起与自动回传状态机：通过监听节点独立缓存目录，兼容 Word/Excel 原子替换保存机制。</figcaption>
+  </figure>
+  <ul>
+    <li><strong>独立隔离目录</strong>：缓存在 <code>{app_cache_dir}/office_workspace/{node_id}/{file_name}</code>，杜绝同名文件互相覆盖。</li>
+    <li><strong>必须监听父目录</strong>：Word/Excel 保存时采用「写临时文件再原子替换 inode」，直接监听单文件句柄会在首次保存后失效；须监听 <code>{node_id}/</code> 目录并过滤 <code>~$*</code> 与 <code>.tmp</code>。</li>
+    <li><strong>共享读锁探测</strong>：1200ms 防抖后若 Windows 报 <code>ERROR_SHARING_VIOLATION</code>，间隔 500ms 最多重试 5 次再算 <code>SHA-256</code> 上传。</li>
+  </ul>
+
+  <h2>5. OneNote 一次性全量迁移深度算法</h2>
+  <ul>
+    <li><strong>通道 A（Microsoft Graph API）</strong>：按 Notebooks → SectionGroups → Sections → Pages 递归遍历（<a href="https://learn.microsoft.com/en-us/graph/onenote-get-content" target="_blank" rel="noopener noreferrer">Graph OneNote API</a>）。受委托限额 <strong>120 次/分、400 次/小时、5 并发</strong> 且 429 缺 <code>Retry-After</code> 约束（<a href="https://note-bridge.co/en/blog/microsoft-graph-rate-limiting-onenote" target="_blank" rel="noopener noreferrer">限流实测</a>），Worker 限制 3 并发 + 双层令牌桶（90 次/分、360 次/小时）+ 指数退避（30s→300s），每页落盘 <code>cursor_state</code> 实现断点续传。</li>
+    <li><strong>通道 B（本地 <code>.onepkg</code> 高速解析）</strong>：Windows OneNote 导出 <code>*.onepkg</code> 后拖入 PC 端，Rust 调用 <a href="https://github.com/msiemens/onenote.rs" target="_blank" rel="noopener noreferrer">onenote.rs</a> 本地直读二进制分区文件，绕过云端限流，数千页笔记 5–10 分钟即可迁完。</li>
+    <li><strong>HTML 清洗与 AST 转换</strong>：将 <code>data-absolute-enabled</code> 绝对定位容器（<a href="https://learn.microsoft.com/en-us/graph/onenote-input-output-html" target="_blank" rel="noopener noreferrer">输出 HTML 规范</a>）按 <code>(top, left)</code> 线性化；依据页面 <code>level</code>（0/1/2）还原父子嵌套；图片转存 S3；内嵌 <code>.docx/.xlsx</code> 自动拆分为子节点并在正文插引用卡片；最终编译为 <code>Y.Doc</code> 二进制入库。</li>
+  </ul>
+
+  <h2>6. Docker Compose 生产部署与 W1–W16 周级研发排期</h2>
+  <p>服务端由 <code>postgres:16-alpine</code>、<code>redis:7-alpine</code>、<code>minio</code>、<code>server</code>、<code>preview-worker</code>（内存上限 1 GB，含无头 LibreOffice 与中文字体）与 <code>caddy:2-alpine</code> 构成，2C2G+ 服务器一键拉起；宿主机每日 3:00 执行 <code>pg_dump</code> 与 <code>rclone sync</code> 异地备份。</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:9%;">周次</th>
+          <th style="width:16%;">里程碑</th>
+          <th style="width:45%;">周级工程交付物</th>
+          <th style="width:30%;">量化测试与验收标准</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="nowrap"><strong>W1</strong></td><td>M1 核心闭环</td><td>Monorepo 初始化、Docker 本地依赖、JWT 鉴权与多端设备注册。</td><td><code>docker compose up</code> 一键启动；鉴权集成测试 100% 通过。</td></tr>
+        <tr><td class="nowrap"><strong>W2</strong></td><td>M1 核心闭环</td><td>PostgreSQL <code>nodes</code> 表、<code>ltree</code> 子树移动 SQL、LexoRank 排序与回收站接口。</td><td>单测覆盖 10 层嵌套移动、防环校验与 100 次连续拖拽无冲突。</td></tr>
+        <tr><td class="nowrap"><strong>W3</strong></td><td>M1 核心闭环</td><td>Web 三栏骨架、虚拟滚动无限目录树（<code>@dnd-kit</code>）、右键菜单与面包屑。</td><td>5,000 节点目录树展开与拖拽保持 60 FPS。</td></tr>
+        <tr><td class="nowrap"><strong>W4</strong></td><td>M1 核心闭环</td><td>Tiptap 富文本编辑器（表格/代码块/待办/贴图）与 Markdown 双向导入导出。</td><td>支持 <code>.md</code> 批量拖入建节点及整棵子树导出。</td></tr>
+        <tr><td class="nowrap"><strong>W5</strong></td><td>M1 核心闭环</td><td>Hocuspocus 协同同步服务端 + Web 端 <code>y-indexeddb</code> 离线持久化。</td><td>双标签页断网同改一段，恢复联网 3 秒内无冲突合并。</td></tr>
+        <tr><td class="nowrap"><strong>W6</strong></td><td>M1 核心闭环</td><td>PostgreSQL 中文全文检索（<code>Ctrl+K</code>）、大纲面板、浅/深主题，Web MVP 上线。</td><td>全文检索 &lt; 150ms；可投入个人日常使用。</td></tr>
+        <tr><td class="nowrap"><strong>W7</strong></td><td>M2 文件与迁移</td><td><code>node_files</code> 版本表、S3 预签名上传、SHA-256 秒传与乐观锁冲突副本。</td><td>50 MB 文件稳定上传；并发提交正确生成冲突副本。</td></tr>
+        <tr><td class="nowrap"><strong>W8</strong></td><td>M2 文件与迁移</td><td><code>preview-worker</code>（无头 LibreOffice 转 PDF + 文本抽取）+ 版本历史抽屉；兜底接入 <a href="https://github.com/VolodymyrBaydalka/docxjs" target="_blank" rel="noopener noreferrer">docx-preview</a> / <a href="https://github.com/sheetjs/sheetjs.github.io" target="_blank" rel="noopener noreferrer">SheetJS</a>。</td><td>复杂 <code>.xlsx/.docx</code> 5 秒内生成预览且内容可被全文搜索命中。</td></tr>
+        <tr><td class="nowrap"><strong>W9</strong></td><td>M2 文件与迁移</td><td>OneNote HTML 清洗器（绝对定位重排、内嵌 Office 拆子节点）与 Yjs 转换器。</td><td>20 篇复杂真实 OneNote 样本导入无乱码、无丢图。</td></tr>
+        <tr><td class="nowrap"><strong>W10</strong></td><td>M2 文件与迁移</td><td>Graph API 限流退避队列、断点续传服务与前端 3 步迁移向导 UI。</td><td>模拟 429 与重启后可自动续传，零重复节点。</td></tr>
+        <tr><td class="nowrap"><strong>W11</strong></td><td>M2 文件与迁移</td><td>Rust <code>onenote.rs</code> 本地 <code>.onepkg</code> 解析命令与个人全量 OneNote 迁移演练。</td><td>100% 历史多层级笔记迁入，抽检 30 篇结构完整。</td></tr>
+        <tr><td class="nowrap"><strong>W12</strong></td><td>M3 PC 集成</td><td>Tauri 2.0 桌面工程、本地 SQLite 离线缓存、系统托盘与全局快捷键。</td><td>安装包 &lt; 15 MB，冷启动 &lt; 0.8s，断网正常读写缓存。</td></tr>
+        <tr><td class="nowrap"><strong>W13</strong></td><td>M3 PC 集成</td><td>Rust <code>OfficeSyncManager</code>（<code>openPath()</code> + 目录监听 + <code>~$</code> 过滤 + 1200ms 防抖回传）。</td><td>Word/Excel/WPS 连续 10 次 <code>Ctrl+S</code> 均在 3 秒内自动上传新版本。</td></tr>
+        <tr><td class="nowrap"><strong>W14</strong></td><td>M3/M4 衔接</td><td>PC 冲突对比弹窗、本地缓存管理；启动 Tauri 2.0 Android 构建与权限配置。</td><td>冲突场景一键保留/另存；Android 真机成功安装运行。</td></tr>
+        <tr><td class="nowrap"><strong>W15</strong></td><td>M4 Android 发布</td><td>Android 抽屉目录、底部导航、悬浮速记、PDF 缩放预览与系统「用其他应用打开」。</td><td>弱网/飞行模式速记流畅，正常唤起手机 WPS。</td></tr>
+        <tr><td class="nowrap"><strong>W16</strong></td><td>M4 运维发布</td><td>全端压测、生产 Docker Compose 与每日异地备份演练，正式切换替代 OneNote。</td><td>连续 7 天三端日常使用零数据丢失，备份还原演练通过。</td></tr>
+      </tbody>
+    </table>
+  </div>
+</main>
+</body>
+</html>
