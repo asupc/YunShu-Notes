@@ -23,8 +23,8 @@
 > 地址保存在客户端本地；需要更换时先退出登录再修改。
 
 - **构建 Windows 客户端**：安装 [Rust](https://rustup.rs/) 后双击 `scripts/build-windows-pc.bat`
-  - 产出单文件 exe，并打包为绿色版 `YunShu-Notes_v<版本>_x64.zip`（附 `.sha256`）
-  - 默认发布到 `\\192.168.1.71\code`（可用 `-ReleaseOut` 修改，共享不可达时保留在 `apps/tauri-app/dist/windows/`）；`-NoPackage` 可只出 exe，`-NoInstall` 可跳过 npm install
+  - 产出单文件 exe `YunShu-Notes_v<版本>_x64.exe`（不打包 zip、不生成校验文件）
+  - 默认发布到 `\\192.168.1.71\code`（可用 `-ReleaseOut` 修改，共享不可达时保留在 `apps/tauri-app/dist/windows/`）；`-NoInstall` 可跳过 npm install
   - exe 默认开启体积优化（Cargo release profile：strip / LTO / `opt-level="z"` / `panic="abort"`，参照 terminal-buddy 的发布配置）
 - **构建 Android `.apk` 安装包**：安装并启动 [Docker Desktop](https://www.docker.com/products/docker-desktop/) 后双击 `scripts/build-android-apk.bat`
   - 无需在宿主机安装 Rust、JDK、Android Studio / SDK / NDK，全部在 `eclipse-temurin:17-jdk` 容器内构建
