@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { type NodeMeta, type NodeType, rankBetween } from '@yunshu/shared';
+import { type NodeMeta, type NodeType, type NoteVersionChangeSource, type NoteVersionDetail, type NoteVersionSummary, rankBetween } from '@yunshu/shared';
 import { db } from '../db';
 import { requireAuth } from './auth';
 
@@ -40,6 +40,117 @@ function mapNode(row: NodeRow): NodeMeta {
     updatedAt: row.updated_at,
   };
 }
+
+interface NoteVersionRow {
+  id: string;
+  node_id: string;
+  version: number;
+  title: string;
+  content_html: string;
+  plain_text: string;
+  change_source: NoteVersionChangeSource;
+  created_at: string;
+}
+
+function mapNoteVersionSummary(row: NoteVersionRow): NoteVersionSummary {
+  const cleaned = (row.plain_text || '').replace(/\s+/g, ' ').trim();
+  return {
+    id: row.id,
+    nodeId: row.node_id,
+    version: row.version,
+    title: row.title,
+    plainTextPreview: cleaned.slice(0, 120),
+    charCount: (row.plain_text || '').replace(/\s+/g, '').length,
+    changeSource: row.change_source,
+    createdAt: row.created_at,
+  };
+}
+
+function mapNoteVersionDetail(row: NoteVersionRow): NoteVersionDetail {
+  return {
+    ...mapNoteVersionSummary(row),
+    contentHtml: row.content_html ?? '',
+    plainText: row.plain_text ?? '',
+  };
+}
+
+function pruneExpiredNoteVersions(userId: string): void {
+  db.prepare(
+    `DELETE FROM note_versions
+     WHERE user_id = ? AND created_at < datetime('now', '-30 days')`
+  ).run(userId);
+}
+
+function recordNoteVersion(
+  nodeId: string,
+  userId: string,
+  title: string,
+  contentHtml: string,
+  plainText: string,
+  changeSource: NoteVersionChangeSource
+): number | null {
+  pruneExpiredNoteVersions(userId);
+
+  const latest = db
+    .prepare(
+      `SELECT id, version, title, content_html, change_source,
+              (strftime('%s', 'now') - strftime('%s', created_at)) AS age_sec
+       FROM note_versions
+       WHERE node_id = ? AND user_id = ?
+       ORDER BY version DESC
+       LIMIT 1`
+    )
+    .get(nodeId, userId) as
+    | {
+        id: string;
+        version: number;
+        title: string;
+        content_html: string;
+        change_source: NoteVersionChangeSource;
+        age_sec: number;
+      }
+    | undefined;
+
+  if (
+    changeSource !== 'before_restore' &&
+    latest &&
+    latest.title === title &&
+    latest.content_html === contentHtml
+  ) {
+    return latest.version;
+  }
+
+  // 自动同步 60 秒内连续保存合并到同一版本快照，避免碎片刷屏
+  if (
+    changeSource === 'auto' &&
+    latest &&
+    latest.change_source === 'auto' &&
+    typeof latest.age_sec === 'number' &&
+    latest.age_sec >= 0 &&
+    latest.age_sec < 60
+  ) {
+    db.prepare(
+      `UPDATE note_versions
+       SET title = ?, content_html = ?, plain_text = ?, created_at = datetime('now')
+       WHERE id = ?`
+    ).run(title, contentHtml, plainText, latest.id);
+    return latest.version;
+  }
+
+  const maxRow = db
+    .prepare('SELECT COALESCE(MAX(version), 0) AS max_ver FROM note_versions WHERE node_id = ? AND user_id = ?')
+    .get(nodeId, userId) as { max_ver: number };
+  const nextVersion = (maxRow?.max_ver ?? 0) + 1;
+
+  db.prepare(
+    `INSERT INTO note_versions (id, node_id, user_id, version, title, content_html, plain_text, change_source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(crypto.randomUUID(), nodeId, userId, nextVersion, title, contentHtml, plainText, changeSource);
+
+  db.prepare('UPDATE nodes SET current_version = ? WHERE id = ? AND user_id = ?').run(nextVersion, nodeId, userId);
+  return nextVersion;
+}
+
 
 export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/v1/nodes/tree', async (req, reply) => {
@@ -151,6 +262,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
     contentHtml: z.string().optional(),
     plainText: z.string().optional(),
     isPinned: z.boolean().optional(),
+    saveVersion: z.enum(['auto', 'manual']).optional(),
   });
 
   app.patch('/api/v1/nodes/:id', async (req, reply) => {
@@ -160,9 +272,38 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
     const parsed = updateSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: '更新参数错误' });
 
-    const { title, contentHtml, plainText, isPinned } = parsed.data;
-    const info = db
+    const { title, contentHtml, plainText, isPinned, saveVersion } = parsed.data;
+    const existing = db
       .prepare(
+        `SELECT id, title, node_type, content_html, plain_text
+         FROM nodes WHERE id = ? AND user_id = ?`
+      )
+      .get(id, auth.userId) as
+      | { id: string; title: string; node_type: NodeType; content_html: string; plain_text: string }
+      | undefined;
+    if (!existing) return reply.code(404).send({ error: '节点不存在' });
+
+    const nextTitle = title ?? existing.title;
+    const nextHtml = contentHtml ?? existing.content_html;
+    const nextPlain = plainText ?? existing.plain_text;
+    const isNoteNode = existing.node_type === 'note' || existing.node_type === 'markdown';
+
+    db.transaction(() => {
+      // 首次同步已有内容的旧笔记前，先留存修改前的基线快照以便回滚
+      if (isNoteNode && (contentHtml !== undefined || saveVersion !== undefined)) {
+        const verCount = db
+          .prepare('SELECT COUNT(1) AS cnt FROM note_versions WHERE node_id = ? AND user_id = ?')
+          .get(id, auth.userId) as { cnt: number };
+        if (
+          verCount.cnt === 0 &&
+          existing.content_html.trim() !== '' &&
+          (existing.content_html !== nextHtml || existing.title !== nextTitle)
+        ) {
+          recordNoteVersion(id, auth.userId, existing.title, existing.content_html, existing.plain_text, 'auto');
+        }
+      }
+
+      db.prepare(
         `UPDATE nodes
          SET title = COALESCE(?, title),
              content_html = COALESCE(?, content_html),
@@ -170,8 +311,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
              is_pinned = COALESCE(?, is_pinned),
              updated_at = datetime('now')
          WHERE id = ? AND user_id = ?`
-      )
-      .run(
+      ).run(
         title ?? null,
         contentHtml ?? null,
         plainText ?? null,
@@ -180,7 +320,11 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
         auth.userId
       );
 
-    if (info.changes === 0) return reply.code(404).send({ error: '节点不存在' });
+      if (isNoteNode && (contentHtml !== undefined || saveVersion !== undefined)) {
+        recordNoteVersion(id, auth.userId, nextTitle, nextHtml, nextPlain, saveVersion ?? 'auto');
+      }
+    })();
+
     const updated = db
       .prepare(
         `SELECT id, parent_id, path, rank, title, node_type, icon,
@@ -189,6 +333,99 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
       )
       .get(id) as NodeRow;
     return { node: mapNode(updated) };
+  });
+
+  // 笔记历史版本列表（仅保留最近 30 天）
+  app.get('/api/v1/nodes/:id/versions', async (req, reply) => {
+    const auth = await requireAuth(req, reply);
+    if (!auth) return;
+    const { id } = req.params as { id: string };
+    const node = db
+      .prepare('SELECT id FROM nodes WHERE id = ? AND user_id = ?')
+      .get(id, auth.userId) as { id: string } | undefined;
+    if (!node) return reply.code(404).send({ error: '节点不存在' });
+
+    pruneExpiredNoteVersions(auth.userId);
+    const rows = db
+      .prepare(
+        `SELECT id, node_id, version, title, content_html, plain_text, change_source, created_at
+         FROM note_versions
+         WHERE node_id = ? AND user_id = ? AND created_at >= datetime('now', '-30 days')
+         ORDER BY version DESC`
+      )
+      .all(id, auth.userId) as NoteVersionRow[];
+
+    return {
+      retentionDays: 30,
+      versions: rows.map(mapNoteVersionSummary),
+    };
+  });
+
+  // 查看单个历史版本完整内容
+  app.get('/api/v1/nodes/:id/versions/:versionId', async (req, reply) => {
+    const auth = await requireAuth(req, reply);
+    if (!auth) return;
+    const { id, versionId } = req.params as { id: string; versionId: string };
+    const row = db
+      .prepare(
+        `SELECT id, node_id, version, title, content_html, plain_text, change_source, created_at
+         FROM note_versions
+         WHERE id = ? AND node_id = ? AND user_id = ? AND created_at >= datetime('now', '-30 days')`
+      )
+      .get(versionId, id, auth.userId) as NoteVersionRow | undefined;
+    if (!row) return reply.code(404).send({ error: '历史版本不存在或已超过30天保留期' });
+    return { version: mapNoteVersionDetail(row) };
+  });
+
+  // 恢复到指定历史版本（恢复前自动备份当前内容）
+  app.post('/api/v1/nodes/:id/versions/:versionId/restore', async (req, reply) => {
+    const auth = await requireAuth(req, reply);
+    if (!auth) return;
+    const { id, versionId } = req.params as { id: string; versionId: string };
+
+    const target = db
+      .prepare(
+        `SELECT id, node_id, version, title, content_html, plain_text, change_source, created_at
+         FROM note_versions
+         WHERE id = ? AND node_id = ? AND user_id = ? AND created_at >= datetime('now', '-30 days')`
+      )
+      .get(versionId, id, auth.userId) as NoteVersionRow | undefined;
+    if (!target) return reply.code(404).send({ error: '历史版本不存在或已超过30天保留期' });
+
+    const current = db
+      .prepare('SELECT id, title, content_html, plain_text FROM nodes WHERE id = ? AND user_id = ?')
+      .get(id, auth.userId) as
+      | { id: string; title: string; content_html: string; plain_text: string }
+      | undefined;
+    if (!current) return reply.code(404).send({ error: '节点不存在' });
+
+    db.transaction(() => {
+      if (current.content_html !== target.content_html || current.title !== target.title) {
+        recordNoteVersion(id, auth.userId, current.title, current.content_html, current.plain_text, 'before_restore');
+      }
+      db.prepare(
+        `UPDATE nodes
+         SET title = ?, content_html = ?, plain_text = ?, updated_at = datetime('now')
+         WHERE id = ? AND user_id = ?`
+      ).run(target.title, target.content_html, target.plain_text, id, auth.userId);
+
+      recordNoteVersion(id, auth.userId, target.title, target.content_html, target.plain_text, 'manual');
+    })();
+
+    const updated = db
+      .prepare(
+        `SELECT id, parent_id, path, rank, title, node_type, icon,
+                current_file_id, current_version, is_pinned, is_deleted, created_at, updated_at
+         FROM nodes WHERE id = ?`
+      )
+      .get(id) as NodeRow;
+
+    return {
+      node: mapNode(updated),
+      contentHtml: target.content_html,
+      plainText: target.plain_text,
+      restoredFromVersion: target.version,
+    };
   });
 
   const moveSchema = z.object({

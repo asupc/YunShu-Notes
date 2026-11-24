@@ -76,6 +76,21 @@ CREATE TABLE IF NOT EXISTS node_files (
 CREATE INDEX IF NOT EXISTS idx_node_files_sha256 ON node_files (sha256);
 CREATE INDEX IF NOT EXISTS idx_node_files_node_ver ON node_files (node_id, version DESC);
 
+CREATE TABLE IF NOT EXISTS note_versions (
+  id             TEXT PRIMARY KEY,
+  node_id        TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  version        INTEGER NOT NULL,
+  title          TEXT NOT NULL,
+  content_html   TEXT NOT NULL,
+  plain_text     TEXT NOT NULL,
+  change_source  TEXT NOT NULL DEFAULT 'auto' CHECK (change_source IN ('auto','manual','before_restore')),
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_note_versions_node_created ON note_versions (node_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_note_versions_node_ver ON note_versions (node_id, version DESC);
+
 CREATE TABLE IF NOT EXISTS import_jobs (
   id              TEXT PRIMARY KEY,
   user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

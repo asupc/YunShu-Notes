@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -17,9 +17,11 @@ interface CanvasBlockEditorProps {
   isActive: boolean;
   canDelete: boolean;
   autoFocus?: boolean;
+  /** 仅在画布级撤销/重做或恢复历史版本时递增，用来同步外部内容而不破坏正常输入时的撤销栈 */
+  externalSyncToken: number;
   onRegisterEditor: (blockId: string, editor: Editor | null) => void;
   onFocusBlock: (blockId: string, editor: Editor) => void;
-  onContentChange: (blockId: string, html: string) => void;
+  onContentChange: (blockId: string, html: string, deletedContent: boolean) => void;
   onGeometryChange: (
     blockId: string,
     patch: Partial<Pick<CanvasBlock, 'x' | 'y' | 'width' | 'minHeight'>>,
@@ -34,6 +36,7 @@ export const CanvasBlockEditor: React.FC<CanvasBlockEditorProps> = ({
   isActive,
   canDelete,
   autoFocus = false,
+  externalSyncToken,
   onRegisterEditor,
   onFocusBlock,
   onContentChange,
@@ -43,10 +46,18 @@ export const CanvasBlockEditor: React.FC<CanvasBlockEditorProps> = ({
 }) => {
   const [dragging, setDragging] = useState(false);
   const [resizing, setResizing] = useState(false);
+  const applyingExternalRef = useRef(false);
+  const lastHtmlLenRef = useRef((block.html || '').length);
+  const appliedSyncTokenRef = useRef(externalSyncToken);
 
   const editor = useEditor({
     extensions: [
-      StarterKit,
+      StarterKit.configure({
+        history: {
+          depth: 200,
+          newGroupDelay: 250,
+        },
+      }),
       TaskList,
       TaskItem.configure({ nested: true }),
       Table.configure({ resizable: true }),
@@ -92,7 +103,11 @@ export const CanvasBlockEditor: React.FC<CanvasBlockEditorProps> = ({
       onFocusBlock(block.id, ed);
     },
     onUpdate: ({ editor: ed }) => {
-      onContentChange(block.id, ed.getHTML());
+      if (applyingExternalRef.current) return;
+      const nextHtml = ed.getHTML();
+      const deletedContent = nextHtml.length < lastHtmlLenRef.current;
+      lastHtmlLenRef.current = nextHtml.length;
+      onContentChange(block.id, nextHtml, deletedContent);
     },
   });
 
@@ -100,6 +115,22 @@ export const CanvasBlockEditor: React.FC<CanvasBlockEditorProps> = ({
     onRegisterEditor(block.id, editor);
     return () => onRegisterEditor(block.id, null);
   }, [block.id, editor, onRegisterEditor]);
+
+  // 仅当 externalSyncToken 变化（画布级撤销/重做/恢复历史版本）时同步外部 HTML
+  useEffect(() => {
+    if (!editor) return;
+    if (appliedSyncTokenRef.current === externalSyncToken) return;
+    appliedSyncTokenRef.current = externalSyncToken;
+    const targetHtml = block.html || '';
+    if (editor.getHTML() === targetHtml) return;
+    applyingExternalRef.current = true;
+    try {
+      editor.commands.setContent(targetHtml, false);
+      lastHtmlLenRef.current = targetHtml.length;
+    } finally {
+      applyingExternalRef.current = false;
+    }
+  }, [editor, externalSyncToken, block.html]);
 
   useEffect(() => {
     if (autoFocus && editor) {
@@ -276,9 +307,7 @@ export const CanvasBlockEditor: React.FC<CanvasBlockEditorProps> = ({
         style={{ touchAction: 'none' }}
         title="拖拽调整宽度"
         className={`absolute top-5 -right-1 bottom-3 w-2 cursor-ew-resize rounded-full transition-colors ${
-          resizing
-            ? 'bg-blue-500/60'
-            : 'bg-transparent hover:bg-blue-400/50'
+          resizing ? 'bg-blue-500/60' : 'bg-transparent hover:bg-blue-400/50'
         }`}
       />
 
@@ -288,9 +317,7 @@ export const CanvasBlockEditor: React.FC<CanvasBlockEditorProps> = ({
         style={{ touchAction: 'none' }}
         title="拖拽调整高度"
         className={`absolute left-3 right-3 -bottom-1 h-2 cursor-ns-resize rounded-full transition-colors ${
-          resizing
-            ? 'bg-blue-500/60'
-            : 'bg-transparent hover:bg-blue-400/50'
+          resizing ? 'bg-blue-500/60' : 'bg-transparent hover:bg-blue-400/50'
         }`}
       />
 

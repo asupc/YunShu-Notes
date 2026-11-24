@@ -35,6 +35,24 @@ export interface NodeTreeItem extends NodeMeta {
   children: NodeTreeItem[];
 }
 
+export type NoteVersionChangeSource = 'auto' | 'manual' | 'before_restore';
+
+export interface NoteVersionSummary {
+  id: string;
+  nodeId: string;
+  version: number;
+  title: string;
+  plainTextPreview: string;
+  charCount: number;
+  changeSource: NoteVersionChangeSource;
+  createdAt: string;
+}
+
+export interface NoteVersionDetail extends NoteVersionSummary {
+  contentHtml: string;
+  plainText: string;
+}
+
 export interface NodeFileVersion {
   id: string;
   nodeId: string;

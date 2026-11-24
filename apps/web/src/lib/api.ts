@@ -4,6 +4,8 @@ import type {
   NodeFileVersion,
   NodeMeta,
   NodeType,
+  NoteVersionDetail,
+  NoteVersionSummary,
   SearchHit,
   UserProfile,
 } from '@yunshu/shared';
@@ -148,11 +150,36 @@ export const api = {
 
   updateNode: (
     id: string,
-    payload: { title?: string; contentHtml?: string; plainText?: string; isPinned?: boolean }
+    payload: {
+      title?: string;
+      contentHtml?: string;
+      plainText?: string;
+      isPinned?: boolean;
+      saveVersion?: 'auto' | 'manual';
+    }
   ) =>
     request<{ node: NodeMeta }>(`/api/v1/nodes/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
+    }),
+
+  listNoteVersions: (nodeId: string) =>
+    request<{ retentionDays: number; versions: NoteVersionSummary[] }>(
+      `/api/v1/nodes/${nodeId}/versions`
+    ),
+
+  getNoteVersion: (nodeId: string, versionId: string) =>
+    request<{ version: NoteVersionDetail }>(`/api/v1/nodes/${nodeId}/versions/${versionId}`),
+
+  restoreNoteVersion: (nodeId: string, versionId: string) =>
+    request<{
+      node: NodeMeta;
+      contentHtml: string;
+      plainText: string;
+      restoredFromVersion: number;
+    }>(`/api/v1/nodes/${nodeId}/versions/${versionId}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({}),
     }),
 
   moveNode: (
