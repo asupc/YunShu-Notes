@@ -91,6 +91,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
   const setTheme = useAppStore((s) => s.setTheme);
   const setSearchOpen = useAppStore((s) => s.setSearchOpen);
   const setUser = useAppStore((s) => s.setUser);
+  const showTip = useAppStore((s) => s.showTip);
 
   // 内部节点拖拽（基于 Pointer Events，兼容 Windows WebView2 / 浏览器 / 安卓触控）
   const [pointerDrag, setPointerDrag] = useState<PointerDragState | null>(null);
@@ -98,8 +99,6 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
   const [fileDropNodeId, setFileDropNodeId] = useState<string | null>(null);
   const [fileDropRoot, setFileDropRoot] = useState(false);
 
-  const [uploading, setUploading] = useState(false);
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
   // 美化弹窗状态：重命名、移动到目录、删除确认、退出登录确认
@@ -114,24 +113,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
   const justDraggedRef = useRef(false);
   const autoExpandTimerRef = useRef<{ folderId: string; timer: number } | null>(null);
 
-  const showToast = useCallback((msg: string) => {
-    setToastMsg(msg);
-    window.setTimeout(() => setToastMsg((cur) => (cur === msg ? null : cur)), 2800);
-  }, []);
 
-  // 智能目标目录：仅取当前 Tab 独立目录树中的选中目录
-  const activeCreateTarget = useMemo(() => {
-    const active = nodes.find((n) => n.id === activeNodeId && n.section === activeTab);
-    if (!active) return { id: null as string | null, label: '根目录' };
-    if (active.nodeType === 'folder') {
-      return { id: active.id, label: active.title };
-    }
-    if (active.parentId) {
-      const parent = nodes.find((n) => n.id === active.parentId && n.section === activeTab);
-      if (parent) return { id: parent.id, label: parent.title };
-    }
-    return { id: null as string | null, label: '根目录' };
-  }, [nodes, activeNodeId, activeTab]);
 
   const moveFolderOptions = useMemo<MoveFolderOption[]>(() => {
     const opts: MoveFolderOption[] = [{ id: null, title: '根目录', depth: 0 }];
@@ -206,7 +188,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
       const allNodes = useAppStore.getState().nodes;
       const targetFolder = newParentId ? allNodes.find((n) => n.id === newParentId) : null;
       if (targetFolder && (targetFolder.id === sourceNode.id || targetFolder.path.startsWith(sourceNode.path))) {
-        showToast('不能将目录移动到自身或子目录下');
+        showTip('不能将目录移动到自身或子目录下', 'error');
         return;
       }
       try {
@@ -215,13 +197,11 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           toggleExpand(newParentId);
         }
         await loadTree();
-        const targetName = targetFolder ? targetFolder.title : '根目录';
-        showToast(`已将「${sourceNode.title}」移动到「${targetName}」`);
       } catch (err) {
-        showToast(err instanceof Error ? err.message : '移动节点失败');
+        showTip(err instanceof Error ? err.message : '移动节点失败', 'error');
       }
     },
-    [loadTree, showToast, toggleExpand]
+    [loadTree, showTip, toggleExpand]
   );
 
   // 根据指针坐标解析当前悬停的投放目标（零闪烁、兼容 WebView2 / 触控）
@@ -426,7 +406,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         if (finalDrag && finalDrag.status === 'valid' && finalDrag.targetParentId !== undefined) {
           void executeMoveNode(finalDrag.sourceNode, finalDrag.targetParentId);
         } else if (finalDrag && finalDrag.status === 'invalid') {
-          showToast('不能将目录移动到自身或子目录下');
+          showTip('不能将目录移动到自身或子目录下', 'error');
         }
       }
     };
@@ -443,7 +423,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
     explicitSection?: WorkspaceSection
   ) => {
     const targetSection: WorkspaceSection = explicitSection ?? activeTab;
-    const parentId = explicitParentId !== undefined ? explicitParentId : activeCreateTarget.id;
+    const parentId = explicitParentId ?? null;
     const defaultTitle =
       nodeType === 'folder' ? '新建目录' : nodeType === 'markdown' ? '未命名 Markdown' : '未命名笔记';
     const res = await api.createNode({
@@ -460,7 +440,6 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
   const uploadFilesToParent = async (files: FileList | File[], parentId: string | null) => {
     const list = Array.from(files);
     if (list.length === 0) return;
-    setUploading(true);
     try {
       for (const file of list) {
         const lower = file.name.toLowerCase();
@@ -531,16 +510,14 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         if (parentId && !expandedIds[parentId]) toggleExpand(parentId);
         selectNode(created.node.id);
       }
-      showToast(`已成功上传 ${list.length} 个文件`);
+      showTip(`已成功上传 ${list.length} 个文件`);
     } catch (err) {
-      showToast(err instanceof Error ? err.message : '上传文件失败');
-    } finally {
-      setUploading(false);
+      showTip(err instanceof Error ? err.message : '上传文件失败', 'error');
     }
   };
 
   const triggerUpload = (explicitParentId?: string | null) => {
-    uploadParentRef.current = explicitParentId !== undefined ? explicitParentId : activeCreateTarget.id;
+    uploadParentRef.current = explicitParentId ?? null;
     fileInputRef.current?.click();
   };
 
@@ -757,61 +734,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-1.5">
-          {activeTab === 'notes' ? (
-            <button
-              type="button"
-              onClick={() => void handleCreate('note')}
-              className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-blue-600 hover:bg-blue-700 text-white"
-              title={`在「${activeCreateTarget.label}」下新建笔记`}
-            >
-              <Plus className="w-3.5 h-3.5" />
-              新建笔记
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={uploading}
-              onClick={() => triggerUpload()}
-              className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
-              title={`上传文档到「${activeCreateTarget.label}」`}
-            >
-              <Upload className="w-3.5 h-3.5" />
-              {uploading ? '上传中...' : '上传文档'}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => void handleCreate('folder')}
-            className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-800"
-            title={`在「${activeCreateTarget.label}」下新建${activeTab === 'docs' ? '文档' : '笔记'}目录`}
-          >
-            <FolderPlus className="w-3.5 h-3.5" />
-            新建目录
-          </button>
-        </div>
-
-        <div className="flex items-center justify-between text-[11px] text-slate-500 px-0.5">
-          <span className="truncate">
-            新建位置：<strong className="text-slate-700 dark:text-slate-300">{activeCreateTarget.label}</strong>
-          </span>
-          {activeCreateTarget.id && (
-            <button
-              type="button"
-              onClick={() => selectNode(null)}
-              className="text-blue-600 dark:text-blue-400 hover:underline shrink-0 ml-1"
-            >
-              回到根目录
-            </button>
-          )}
-        </div>
       </div>
-
-      {toastMsg && (
-        <div className="mx-2 mt-2 px-2.5 py-1.5 text-xs rounded-md bg-blue-50 dark:bg-blue-950/70 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-          {toastMsg}
-        </div>
-      )}
 
       {/* 无限层级目录树容器（relative 包裹，顶部根目录投放区采用浮层避免触发任何布局抖动） */}
       <div className="relative flex-1 min-h-0 flex flex-col">
@@ -859,13 +782,13 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                 <>
                   还没有任何笔记
                   <br />
-                  点击上方「新建笔记」或「新建目录」开始记录
+                  右键空白处新建笔记或目录
                 </>
               ) : (
                 <>
                   还没有任何文档
                   <br />
-                  点击上方「上传文档」或直接把 Word / Excel / PDF 拖入此处
+                  右键空白处上传文档或直接把 Word / Excel / PDF 拖入此处
                 </>
               )}
             </div>
@@ -877,7 +800,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
 
       {/* 底部工具栏 */}
       <div className="p-2.5 border-t border-slate-200 dark:border-neutral-800 flex items-center justify-between text-xs text-slate-600 dark:text-slate-400">
-        <span className="text-[11px] text-slate-400">拖拽改目录 · F2 重命名</span>
+        <span className="text-[11px] text-slate-400">右键管理 · 拖拽改目录</span>
 
         <div className="flex items-center gap-1">
           <button

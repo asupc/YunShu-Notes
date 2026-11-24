@@ -75,8 +75,10 @@ interface AppState {
   syncing: boolean;
   lastSyncedAt: string | null;
   syncError: string | null;
+  statusTip: { id: number; text: string; tone: 'info' | 'error' } | null;
 
   initAuth: () => Promise<void>;
+  showTip: (text: string, tone?: 'info' | 'error') => void;
   setUser: (user: UserProfile | null, token?: string | null) => void;
   loadTree: () => Promise<void>;
   manualSync: () => Promise<void>;
@@ -110,6 +112,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   syncing: false,
   lastSyncedAt: null,
   syncError: null,
+  statusTip: null,
+
+  showTip: (text, tone = 'info') => {
+    const id = Date.now() + Math.random();
+    set({ statusTip: { id, text, tone } });
+    window.setTimeout(() => {
+      set((s) => (s.statusTip?.id === id ? { statusTip: null } : s));
+    }, 3200);
+  },
 
   initAuth: async () => {
     try {

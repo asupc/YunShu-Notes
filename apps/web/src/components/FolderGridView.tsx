@@ -93,19 +93,16 @@ export const FolderGridView: React.FC<{ folder: NodeMeta }> = ({ folder }) => {
   const selectNode = useAppStore((s) => s.selectNode);
   const toggleExpand = useAppStore((s) => s.toggleExpand);
   const loadTree = useAppStore((s) => s.loadTree);
+  const showTip = useAppStore((s) => s.showTip);
 
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const showToast = (msg: string) => {
-    setToastMsg(msg);
-    window.setTimeout(() => setToastMsg((cur) => (cur === msg ? null : cur)), 2800);
-  };
+
 
   const isDocsFolder = folder.section === 'docs';
 
@@ -212,9 +209,9 @@ export const FolderGridView: React.FC<{ folder: NodeMeta }> = ({ folder }) => {
       }
       await loadTree();
       if (!expandedIds[targetFolderId]) toggleExpand(targetFolderId);
-      showToast(`已成功上传 ${list.length} 个文件`);
+      showTip(`已成功上传 ${list.length} 个文件`);
     } catch (err) {
-      showToast(err instanceof Error ? err.message : '上传文件失败');
+      showTip(err instanceof Error ? err.message : '上传文件失败', 'error');
     } finally {
       setUploading(false);
     }
@@ -336,12 +333,6 @@ export const FolderGridView: React.FC<{ folder: NodeMeta }> = ({ folder }) => {
           </button>
         </div>
       </div>
-
-      {toastMsg && (
-        <div className="mx-4 sm:mx-6 mt-3 px-3 py-2 text-xs rounded-md bg-blue-50 dark:bg-blue-950/70 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 shrink-0">
-          {toastMsg}
-        </div>
-      )}
 
       {/* 图标视图网格区 */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6">

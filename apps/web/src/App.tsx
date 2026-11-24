@@ -28,6 +28,7 @@ export const App: React.FC = () => {
   const syncing = useAppStore((s) => s.syncing);
   const lastSyncedAt = useAppStore((s) => s.lastSyncedAt);
   const syncError = useAppStore((s) => s.syncError);
+  const statusTip = useAppStore((s) => s.statusTip);
 
   const initAuth = useAppStore((s) => s.initAuth);
   const manualSync = useAppStore((s) => s.manualSync);
@@ -291,6 +292,21 @@ export const App: React.FC = () => {
       </div>
 
       <SearchModal />
+
+      {/* 全局底部统一 Tips 提示条 */}
+      {statusTip && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-[90vw] px-4 py-2 rounded-lg text-xs font-medium shadow-xl border backdrop-blur-sm pointer-events-none ${
+            statusTip.tone === 'error'
+              ? 'bg-red-50/95 dark:bg-red-950/95 text-red-700 dark:text-red-200 border-red-200 dark:border-red-800'
+              : 'bg-slate-900/92 dark:bg-neutral-900/95 text-white dark:text-slate-100 border-slate-700/80 dark:border-neutral-700'
+          }`}
+        >
+          {statusTip.text}
+        </div>
+      )}
     </div>
   );
 };

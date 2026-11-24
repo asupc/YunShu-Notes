@@ -68,6 +68,7 @@ function blocksEqual(a: CanvasBlock[], b: CanvasBlock[]): boolean {
 export const NoteEditor: React.FC<Props> = ({ node }) => {
   const loadTree = useAppStore((s) => s.loadTree);
   const markSyncedNow = useAppStore((s) => s.markSyncedNow);
+  const showTip = useAppStore((s) => s.showTip);
 
   const [title, setTitle] = useState(node.title);
   const [blocks, setBlocks] = useState<CanvasBlock[]>([]);
@@ -77,7 +78,6 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
   const [saveState, setSaveState] = useState<'synced' | 'saving'>('synced');
   const [uploadingImg, setUploadingImg] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [externalSyncToken, setExternalSyncToken] = useState(0);
   const [, setToolbarTick] = useState(0);
 
@@ -98,10 +98,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
   latestBlocksRef.current = blocks;
   latestTitleRef.current = title;
 
-  const showToast = useCallback((msg: string) => {
-    setToastMsg(msg);
-    window.setTimeout(() => setToastMsg((cur) => (cur === msg ? null : cur)), 2800);
-  }, []);
+
 
   const pushCanvasSnapshot = useCallback((beforeState: CanvasBlock[], afterState: CanvasBlock[]) => {
     if (blocksEqual(beforeState, afterState)) return;
@@ -447,11 +444,11 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
         }
         scheduleSave(next, true, 'auto');
         setToolbarTick((t) => t + 1);
-        showToast('已删除文本区域，按 Ctrl+Z 可撤销');
+        showTip('已删除文本区域，按 Ctrl+Z 可撤销');
         return next;
       });
     },
-    [activeBlockId, pushCanvasSnapshot, scheduleSave, showToast]
+    [activeBlockId, pushCanvasSnapshot, scheduleSave, showTip]
   );
 
   const addBlockAt = useCallback(
@@ -617,7 +614,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
     setSaveState('synced');
     markSyncedNow();
     await loadTree();
-    showToast(`已恢复到版本 v${payload.restoredFromVersion}（原内容已自动备份）`);
+    showTip(`已恢复到版本 v${payload.restoredFromVersion}（原内容已自动备份）`);
   };
 
   // 自动向右下扩展的画布舞台尺寸
@@ -825,12 +822,6 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           </button>
         </div>
       </div>
-
-      {toastMsg && (
-        <div className="mx-4 sm:mx-6 mt-2 px-3 py-1.5 text-xs rounded-md bg-blue-50 dark:bg-blue-950/70 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 shrink-0">
-          {toastMsg}
-        </div>
-      )}
 
       {/* 固定在画布上方的笔记标题区 */}
       <div className="px-4 sm:px-6 lg:px-8 pt-4 pb-2.5 border-b border-slate-100 dark:border-neutral-900 shrink-0 bg-white dark:bg-black flex items-baseline justify-between gap-4">

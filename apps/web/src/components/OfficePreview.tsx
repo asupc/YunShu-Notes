@@ -21,12 +21,12 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
   const [versions, setVersions] = useState<NodeFileVersion[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState('');
   const reuploadRef = useRef<HTMLInputElement>(null);
 
   const syncState = useAppStore((s) => s.officeSyncMap[node.id] ?? 'synced');
   const setOfficeSyncState = useAppStore((s) => s.setOfficeSyncState);
   const loadTree = useAppStore((s) => s.loadTree);
+  const showTip = useAppStore((s) => s.showTip);
 
   const fetchAll = async () => {
     setLoading(true);
@@ -35,7 +35,7 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
       setFileInfo(urls);
       setVersions(verRes.versions);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : '读取文件信息失败');
+      showTip(err instanceof Error ? err.message : '读取文件信息失败', 'error');
     } finally {
       setLoading(false);
     }
@@ -49,7 +49,7 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
     if (!fileInfo) return;
     if (!isTauriRuntime()) {
       window.open(fileInfo.downloadUrl, '_blank');
-      setMessage('当前为 Web 浏览器模式，已为你下载原文件；在 Windows 桌面端点击将直接唤起本机 Office 并在 Ctrl+S 保存后自动回传。');
+      showTip('当前为 Web 浏览器模式，已为你下载原文件；在桌面端点击将直接唤起本机 Office 并自动回传。');
       return;
     }
     try {
@@ -69,13 +69,13 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
         if (res !== 'OK') {
           throw new Error(res || '安卓端唤起 WPS / Office 失败');
         }
-        setMessage('已调用本机 WPS / Office 打开文件。保存后若写回原文件将自动同步回云端。');
+        showTip('已调用本机 WPS / Office 打开文件。保存后若写回原文件将自动同步回云端。');
       } else {
-        setMessage('已调用本机 Office 打开文件。修改后按 Ctrl+S 保存，将自动回传新版本。');
+        showTip('已调用本机 Office 打开文件。修改后按 Ctrl+S 保存，将自动回传新版本。');
       }
     } catch (err) {
       setOfficeSyncState(node.id, 'error');
-      setMessage(err instanceof Error ? err.message : '唤起本机 Office 失败');
+      showTip(err instanceof Error ? err.message : '唤起本机 Office 失败', 'error');
     }
   };
 
@@ -224,12 +224,6 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
           </button>
         </div>
       </div>
-
-      {message && (
-        <div className="px-4 py-2 text-xs bg-slate-50 dark:bg-black border-b border-slate-200 dark:border-neutral-800 text-slate-600 dark:text-slate-300">
-          {message}
-        </div>
-      )}
 
       {/* 主体：预览画布 + 右侧版本历史抽屉 */}
       <div className="flex-1 flex overflow-hidden">
