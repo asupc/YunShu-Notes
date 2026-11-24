@@ -163,11 +163,11 @@ export const NoteHistoryDrawer: React.FC<NoteHistoryDrawerProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-[2px] flex items-center justify-center p-2 sm:p-6"
+      className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[1px] flex justify-end"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-5xl h-[88vh] rounded-xl bg-white dark:bg-neutral-950 border border-slate-200 dark:border-neutral-800 shadow-2xl flex flex-col overflow-hidden"
+        className="w-full sm:w-[660px] lg:w-[760px] max-w-[96vw] h-full bg-white dark:bg-neutral-950 border-l border-slate-200 dark:border-neutral-800 shadow-2xl flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 顶栏 */}
@@ -200,7 +200,7 @@ export const NoteHistoryDrawer: React.FC<NoteHistoryDrawerProps> = ({
         {/* 主体：左侧版本列表 + 右侧历史内容预览 */}
         <div className="flex-1 min-h-0 flex flex-col sm:flex-row overflow-hidden">
           {/* 版本时间线 */}
-          <div className="w-full sm:w-72 md:w-80 max-h-[34vh] sm:max-h-none border-b sm:border-b-0 sm:border-r border-slate-200 dark:border-neutral-800 overflow-y-auto bg-slate-50/40 dark:bg-black p-2.5 space-y-1.5 shrink-0">
+          <div className="w-full sm:w-64 max-h-[34vh] sm:max-h-none border-b sm:border-b-0 sm:border-r border-slate-200 dark:border-neutral-800 overflow-y-auto bg-slate-50/40 dark:bg-black p-2.5 space-y-1.5 shrink-0">
             {loadingList ? (
               <div className="py-10 text-center text-xs text-slate-400">正在加载历史记录...</div>
             ) : versions.length === 0 ? (
