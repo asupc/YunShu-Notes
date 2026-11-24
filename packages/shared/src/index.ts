@@ -1,5 +1,7 @@
 export type NodeType = 'folder' | 'note' | 'markdown' | 'docx' | 'xlsx' | 'pdf';
 
+export type WorkspaceSection = 'notes' | 'docs';
+
 export type PreviewStatus = 'pending' | 'ready' | 'failed';
 
 export type OfficeSyncState = 'synced' | 'editing_local' | 'uploading' | 'conflict' | 'error';
@@ -22,6 +24,7 @@ export interface NodeMeta {
   rank: string;
   title: string;
   nodeType: NodeType;
+  section: WorkspaceSection;
   icon?: string | null;
   currentFileId?: string | null;
   currentVersion: number;

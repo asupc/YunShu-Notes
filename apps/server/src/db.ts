@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   rank            TEXT NOT NULL,
   title           TEXT NOT NULL,
   node_type       TEXT NOT NULL CHECK (node_type IN ('folder','note','markdown','docx','xlsx','pdf')),
+  section         TEXT NOT NULL DEFAULT 'notes' CHECK (section IN ('notes','docs')),
   icon            TEXT,
   yjs_state       BLOB,
   content_html    TEXT NOT NULL DEFAULT '',
@@ -108,3 +109,28 @@ CREATE TABLE IF NOT EXISTS import_jobs (
 `;
 
 db.exec(INIT_SQL);
+
+// 平滑迁移：为已有数据库补充 section 列，并将历史 Office/PDF 文档及纯文档目录自动归入 'docs'
+const nodeCols = db.prepare('PRAGMA table_info(nodes)').all() as Array<{ name: string }>;
+if (!nodeCols.some((c) => c.name === 'section')) {
+  db.exec(`ALTER TABLE nodes ADD COLUMN section TEXT NOT NULL DEFAULT 'notes'`);
+  db.exec(`UPDATE nodes SET section = 'docs' WHERE node_type IN ('docx','xlsx','pdf')`);
+  // 若旧目录子树下仅包含文档而不包含任何笔记，则同步归入 docs
+  db.exec(`
+    UPDATE nodes
+    SET section = 'docs'
+    WHERE node_type = 'folder'
+      AND EXISTS (
+        SELECT 1 FROM nodes AS child
+        WHERE child.user_id = nodes.user_id
+          AND child.path LIKE nodes.path || '%'
+          AND child.node_type IN ('docx','xlsx','pdf')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM nodes AS child
+        WHERE child.user_id = nodes.user_id
+          AND child.path LIKE nodes.path || '%'
+          AND child.node_type IN ('note','markdown')
+      )
+  `);
+}

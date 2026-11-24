@@ -1,9 +1,21 @@
 import { create } from 'zustand';
-import { buildNodeTree, type NodeMeta, type NodeTreeItem, type OfficeSyncState, type UserProfile } from '@yunshu/shared';
+import {
+  buildNodeTree,
+  type NodeMeta,
+  type NodeTreeItem,
+  type OfficeSyncState,
+  type UserProfile,
+  type WorkspaceSection,
+} from '@yunshu/shared';
 import { api, setToken } from '../lib/api';
 
 const LAST_ACTIVE_NODE_KEY = 'yunshu_last_active_node_id';
 const EXPANDED_IDS_KEY = 'yunshu_expanded_ids';
+const ACTIVE_TAB_KEY = 'yunshu_active_tab';
+
+function loadSavedTab(): WorkspaceSection {
+  return localStorage.getItem(ACTIVE_TAB_KEY) === 'docs' ? 'docs' : 'notes';
+}
 
 function loadSavedExpandedIds(): Record<string, boolean> {
   try {
@@ -50,6 +62,9 @@ interface AppState {
   authChecked: boolean;
   nodes: NodeMeta[];
   tree: NodeTreeItem[];
+  notesTree: NodeTreeItem[];
+  docsTree: NodeTreeItem[];
+  activeTab: WorkspaceSection;
   activeNodeId: string | null;
   expandedIds: Record<string, boolean>;
   theme: 'light' | 'dark';
@@ -65,9 +80,10 @@ interface AppState {
   setUser: (user: UserProfile | null, token?: string | null) => void;
   loadTree: () => Promise<void>;
   manualSync: () => Promise<void>;
+  setActiveTab: (tab: WorkspaceSection) => void;
   selectNode: (id: string | null) => void;
   toggleExpand: (id: string) => void;
-  setAllExpanded: (expanded: boolean) => void;
+  setAllExpanded: (expanded: boolean, section?: WorkspaceSection) => void;
   setTheme: (theme: 'light' | 'dark') => void;
   setSidebarOpen: (open: boolean) => void;
   setMobileDrawerOpen: (open: boolean) => void;
@@ -81,6 +97,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   authChecked: false,
   nodes: [],
   tree: [],
+  notesTree: [],
+  docsTree: [],
+  activeTab: loadSavedTab(),
   activeNodeId: null,
   expandedIds: loadSavedExpandedIds(),
   theme: (localStorage.getItem('yunshu_theme') as 'light' | 'dark') || 'light',
@@ -107,11 +126,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!user) {
       localStorage.removeItem(LAST_ACTIVE_NODE_KEY);
       localStorage.removeItem(EXPANDED_IDS_KEY);
+      localStorage.removeItem(ACTIVE_TAB_KEY);
       set({
         user: null,
         authChecked: true,
         nodes: [],
         tree: [],
+        notesTree: [],
+        docsTree: [],
+        activeTab: 'notes',
         activeNodeId: null,
         expandedIds: {},
       });
@@ -123,20 +146,31 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadTree: async () => {
     const res = await api.getTree(false);
     const tree = buildNodeTree(res.nodes);
+    const notesTree = buildNodeTree(res.nodes.filter((n) => n.section !== 'docs'));
+    const docsTree = buildNodeTree(res.nodes.filter((n) => n.section === 'docs'));
     const state = get();
-    const idSet = new Set(res.nodes.map((n) => n.id));
+    const byId = new Map(res.nodes.map((n) => [n.id, n]));
 
     let nextActiveId = state.activeNodeId;
-    if (nextActiveId && !idSet.has(nextActiveId)) {
+    if (nextActiveId && !byId.has(nextActiveId)) {
       nextActiveId = null;
       localStorage.removeItem(LAST_ACTIVE_NODE_KEY);
     }
     if (!nextActiveId) {
       const savedId = localStorage.getItem(LAST_ACTIVE_NODE_KEY);
-      if (savedId && idSet.has(savedId)) {
+      if (savedId && byId.has(savedId)) {
         nextActiveId = savedId;
       } else if (savedId) {
         localStorage.removeItem(LAST_ACTIVE_NODE_KEY);
+      }
+    }
+
+    let nextTab = state.activeTab;
+    if (nextActiveId) {
+      const activeNode = byId.get(nextActiveId);
+      if (activeNode) {
+        nextTab = activeNode.section === 'docs' ? 'docs' : 'notes';
+        localStorage.setItem(ACTIVE_TAB_KEY, nextTab);
       }
     }
 
@@ -148,6 +182,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({
       nodes: res.nodes,
       tree,
+      notesTree,
+      docsTree,
+      activeTab: nextTab,
       activeNodeId: nextActiveId,
       expandedIds: nextExpanded,
       lastSyncedAt: new Date().toISOString(),
@@ -159,7 +196,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (get().syncing) return;
     set({ syncing: true, syncError: null });
     try {
-      // 通知当前编辑器立即刷盘并同步最新目录树
       window.dispatchEvent(new CustomEvent('yunshu:manual-sync'));
       await get().loadTree();
     } catch (err) {
@@ -169,6 +205,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  setActiveTab: (tab) => {
+    localStorage.setItem(ACTIVE_TAB_KEY, tab);
+    set({ activeTab: tab });
+  },
+
   selectNode: (id) => {
     if (id) {
       localStorage.setItem(LAST_ACTIVE_NODE_KEY, id);
@@ -176,11 +217,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       localStorage.removeItem(LAST_ACTIVE_NODE_KEY);
     }
     set((s) => {
+      const target = id ? s.nodes.find((n) => n.id === id) : null;
+      const nextTab: WorkspaceSection = target
+        ? target.section === 'docs'
+          ? 'docs'
+          : 'notes'
+        : s.activeTab;
+      if (nextTab !== s.activeTab) {
+        localStorage.setItem(ACTIVE_TAB_KEY, nextTab);
+      }
       const nextExpanded = expandAncestors(s.nodes, id, s.expandedIds);
       if (nextExpanded !== s.expandedIds) {
         saveExpandedIds(nextExpanded);
       }
-      return { activeNodeId: id, expandedIds: nextExpanded, mobileDrawerOpen: false };
+      return {
+        activeNodeId: id,
+        activeTab: nextTab,
+        expandedIds: nextExpanded,
+        mobileDrawerOpen: false,
+      };
     });
   },
 
@@ -191,14 +246,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { expandedIds: next };
     }),
 
-  setAllExpanded: (expanded) =>
+  setAllExpanded: (expanded, section) =>
     set((s) => {
-      if (!expanded) {
-        saveExpandedIds({});
-        return { expandedIds: {} };
+      const next = { ...s.expandedIds };
+      for (const n of s.nodes) {
+        if (!section || n.section === section) {
+          if (expanded) next[n.id] = true;
+          else delete next[n.id];
+        }
       }
-      const next: Record<string, boolean> = {};
-      for (const n of s.nodes) next[n.id] = true;
       saveExpandedIds(next);
       return { expandedIds: next };
     }),

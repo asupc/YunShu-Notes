@@ -107,10 +107,12 @@ export const FolderGridView: React.FC<{ folder: NodeMeta }> = ({ folder }) => {
     window.setTimeout(() => setToastMsg((cur) => (cur === msg ? null : cur)), 2800);
   };
 
-  // 当前目录的直接子节点：目录优先，置顶优先，其次按 rank 排序
+  const isDocsFolder = folder.section === 'docs';
+
+  // 当前目录的直接子节点（仅同分区）：目录优先，置顶优先，其次按 rank 排序
   const children = useMemo(() => {
     return nodes
-      .filter((n) => n.parentId === folder.id)
+      .filter((n) => n.parentId === folder.id && n.section === folder.section)
       .sort((a, b) => {
         if (a.nodeType === 'folder' && b.nodeType !== 'folder') return -1;
         if (a.nodeType !== 'folder' && b.nodeType === 'folder') return 1;
@@ -138,7 +140,7 @@ export const FolderGridView: React.FC<{ folder: NodeMeta }> = ({ folder }) => {
   const handleCreate = async (nodeType: NodeType) => {
     const defaultTitle =
       nodeType === 'folder' ? '新建目录' : nodeType === 'markdown' ? '未命名 Markdown' : '未命名笔记';
-    const res = await api.createNode({ parentId: folder.id, title: defaultTitle, nodeType });
+    const res = await api.createNode({ parentId: folder.id, title: defaultTitle, nodeType, section: folder.section });
     await loadTree();
     if (!expandedIds[folder.id]) toggleExpand(folder.id);
     selectNode(res.node.id);
@@ -155,9 +157,10 @@ export const FolderGridView: React.FC<{ folder: NodeMeta }> = ({ folder }) => {
           const text = await file.text();
           const html = markdownToHtml(text);
           await api.createNode({
-            parentId: targetFolderId,
+            parentId: isDocsFolder ? null : targetFolderId,
             title: file.name.replace(/\.(md|markdown)$/i, ''),
             nodeType: 'markdown',
+            section: 'notes',
             contentHtml: html,
             plainText: text,
           });
@@ -172,9 +175,10 @@ export const FolderGridView: React.FC<{ folder: NodeMeta }> = ({ folder }) => {
             : 'docx';
 
         const created = await api.createNode({
-          parentId: targetFolderId,
+          parentId: isDocsFolder ? targetFolderId : null,
           title: file.name,
           nodeType,
+          section: 'docs',
         });
 
         const hash = await sha256File(file);
@@ -302,14 +306,26 @@ export const FolderGridView: React.FC<{ folder: NodeMeta }> = ({ folder }) => {
         </div>
 
         <div className="flex items-center gap-2 text-xs shrink-0">
-          <button
-            type="button"
-            onClick={() => void handleCreate('note')}
-            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            新建笔记
-          </button>
+          {!isDocsFolder ? (
+            <button
+              type="button"
+              onClick={() => void handleCreate('note')}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              新建笔记
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-medium disabled:opacity-50"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              {uploading ? '上传中...' : '上传文档'}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void handleCreate('folder')}
@@ -317,15 +333,6 @@ export const FolderGridView: React.FC<{ folder: NodeMeta }> = ({ folder }) => {
           >
             <FolderPlus className="w-3.5 h-3.5" />
             新建子目录
-          </button>
-          <button
-            type="button"
-            disabled={uploading}
-            onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 text-slate-700 dark:text-slate-200 disabled:opacity-50"
-          >
-            <Upload className="w-3.5 h-3.5" />
-            {uploading ? '上传中...' : '上传文档'}
           </button>
         </div>
       </div>

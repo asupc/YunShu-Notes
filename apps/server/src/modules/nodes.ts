@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { type NodeMeta, type NodeType, type NoteVersionChangeSource, type NoteVersionDetail, type NoteVersionSummary, rankBetween } from '@yunshu/shared';
+import { type NodeMeta, type NodeType, type WorkspaceSection, type NoteVersionChangeSource, type NoteVersionDetail, type NoteVersionSummary, rankBetween } from '@yunshu/shared';
 import { db } from '../db';
 import { requireAuth } from './auth';
 
@@ -12,6 +12,7 @@ interface NodeRow {
   rank: string;
   title: string;
   node_type: NodeType;
+  section?: WorkspaceSection;
   icon: string | null;
   current_file_id: string | null;
   current_version: number;
@@ -31,6 +32,7 @@ function mapNode(row: NodeRow): NodeMeta {
     rank: row.rank,
     title: row.title,
     nodeType: row.node_type,
+    section: row.section === 'docs' ? 'docs' : 'notes',
     icon: row.icon,
     currentFileId: row.current_file_id,
     currentVersion: row.current_version,
@@ -190,7 +192,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
     const isDeleted = deleted === 'true' ? 1 : 0;
     const rows = db
       .prepare(
-        `SELECT id, parent_id, path, rank, title, node_type, icon,
+        `SELECT id, parent_id, path, rank, title, node_type, section, icon,
                 current_file_id, current_version, is_pinned, is_deleted, created_at, updated_at
          FROM nodes
          WHERE user_id = ? AND is_deleted = ?
@@ -207,6 +209,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
     parentId: z.string().uuid().nullable().optional(),
     title: z.string().min(1, '标题不能为空').max(200),
     nodeType: z.enum(['folder', 'note', 'markdown', 'docx', 'xlsx', 'pdf']),
+    section: z.enum(['notes', 'docs']).optional(),
     prevRank: z.string().nullable().optional(),
     nextRank: z.string().nullable().optional(),
     contentHtml: z.string().optional(),
@@ -220,15 +223,18 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? '参数错误' });
     }
-    const { parentId = null, title, nodeType, prevRank, nextRank, contentHtml = '', plainText = '' } = parsed.data;
+    const { parentId = null, title, nodeType, section: reqSection, prevRank, nextRank, contentHtml = '', plainText = '' } = parsed.data;
 
     let parentPath = '/root/';
+    let resolvedSection: WorkspaceSection =
+      reqSection ?? (nodeType === 'docx' || nodeType === 'xlsx' || nodeType === 'pdf' ? 'docs' : 'notes');
     if (parentId) {
       const parent = db
-        .prepare('SELECT path FROM nodes WHERE id = ? AND user_id = ?')
-        .get(parentId, auth.userId) as { path: string } | undefined;
+        .prepare('SELECT path, section FROM nodes WHERE id = ? AND user_id = ?')
+        .get(parentId, auth.userId) as { path: string; section: WorkspaceSection } | undefined;
       if (!parent) return reply.code(404).send({ error: '父节点不存在' });
       parentPath = parent.path;
+      resolvedSection = reqSection ?? (parent.section === 'docs' ? 'docs' : 'notes');
     }
 
     const newId = crypto.randomUUID();
@@ -252,13 +258,13 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
     }
 
     db.prepare(
-      `INSERT INTO nodes (id, user_id, parent_id, path, rank, title, node_type, content_html, plain_text)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(newId, auth.userId, parentId, newPath, rank, title, nodeType, contentHtml, plainText);
+      `INSERT INTO nodes (id, user_id, parent_id, path, rank, title, node_type, section, content_html, plain_text)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(newId, auth.userId, parentId, newPath, rank, title, nodeType, resolvedSection, contentHtml, plainText);
 
     const created = db
       .prepare(
-        `SELECT id, parent_id, path, rank, title, node_type, icon,
+        `SELECT id, parent_id, path, rank, title, node_type, section, icon,
                 current_file_id, current_version, is_pinned, is_deleted, created_at, updated_at
          FROM nodes WHERE id = ?`
       )
@@ -273,7 +279,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const row = db
       .prepare(
-        `SELECT id, parent_id, path, rank, title, node_type, icon,
+        `SELECT id, parent_id, path, rank, title, node_type, section, icon,
                 current_file_id, current_version, is_pinned, is_deleted,
                 content_html, plain_text, created_at, updated_at
          FROM nodes WHERE id = ? AND user_id = ?`
@@ -357,7 +363,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
 
     const updated = db
       .prepare(
-        `SELECT id, parent_id, path, rank, title, node_type, icon,
+        `SELECT id, parent_id, path, rank, title, node_type, section, icon,
                 current_file_id, current_version, is_pinned, is_deleted, created_at, updated_at
          FROM nodes WHERE id = ?`
       )
@@ -444,7 +450,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
 
     const updated = db
       .prepare(
-        `SELECT id, parent_id, path, rank, title, node_type, icon,
+        `SELECT id, parent_id, path, rank, title, node_type, section, icon,
                 current_file_id, current_version, is_pinned, is_deleted, created_at, updated_at
          FROM nodes WHERE id = ?`
       )

@@ -8,6 +8,7 @@ import type {
   NoteVersionSummary,
   SearchHit,
   UserProfile,
+  WorkspaceSection,
 } from '@yunshu/shared';
 
 const API_BASE_STORAGE_KEY = 'yunshu_api_base';
@@ -137,6 +138,7 @@ export const api = {
     parentId?: string | null;
     title: string;
     nodeType: NodeType;
+    section?: WorkspaceSection;
     contentHtml?: string;
     plainText?: string;
   }) =>

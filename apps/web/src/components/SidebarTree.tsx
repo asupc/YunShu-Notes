@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BookOpen,
   ChevronDown,
+  Files,
   ChevronRight,
   CornerLeftUp,
   Edit3,
@@ -19,7 +21,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import type { NodeMeta, NodeTreeItem, NodeType } from '@yunshu/shared';
+import type { NodeMeta, NodeTreeItem, NodeType, WorkspaceSection } from '@yunshu/shared';
 import { api, sha256File } from '../lib/api';
 import { markdownToHtml } from '../lib/markdown';
 import { useAppStore } from '../store/useAppStore';
@@ -65,13 +67,26 @@ interface PointerDragState {
 
 export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriendly = false }) => {
   const nodes = useAppStore((s) => s.nodes);
-  const tree = useAppStore((s) => s.tree);
+  const notesTree = useAppStore((s) => s.notesTree);
+  const docsTree = useAppStore((s) => s.docsTree);
+  const activeTab = useAppStore((s) => s.activeTab);
+  const setActiveTab = useAppStore((s) => s.setActiveTab);
   const activeNodeId = useAppStore((s) => s.activeNodeId);
   const expandedIds = useAppStore((s) => s.expandedIds);
   const theme = useAppStore((s) => s.theme);
   const selectNode = useAppStore((s) => s.selectNode);
   const toggleExpand = useAppStore((s) => s.toggleExpand);
   const setAllExpanded = useAppStore((s) => s.setAllExpanded);
+
+  const currentTree = activeTab === 'docs' ? docsTree : notesTree;
+  const noteCount = useMemo(
+    () => nodes.filter((n) => n.section !== 'docs' && n.nodeType !== 'folder').length,
+    [nodes]
+  );
+  const docCount = useMemo(
+    () => nodes.filter((n) => n.section === 'docs' && n.nodeType !== 'folder').length,
+    [nodes]
+  );
   const loadTree = useAppStore((s) => s.loadTree);
   const setTheme = useAppStore((s) => s.setTheme);
   const setSearchOpen = useAppStore((s) => s.setSearchOpen);
@@ -104,19 +119,19 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
     window.setTimeout(() => setToastMsg((cur) => (cur === msg ? null : cur)), 2800);
   }, []);
 
-  // 智能目标目录：选中目录时在该目录下创建/上传；选中文档时在其所属目录下创建/上传
+  // 智能目标目录：仅取当前 Tab 独立目录树中的选中目录
   const activeCreateTarget = useMemo(() => {
-    const active = nodes.find((n) => n.id === activeNodeId);
+    const active = nodes.find((n) => n.id === activeNodeId && n.section === activeTab);
     if (!active) return { id: null as string | null, label: '根目录' };
     if (active.nodeType === 'folder') {
       return { id: active.id, label: active.title };
     }
     if (active.parentId) {
-      const parent = nodes.find((n) => n.id === active.parentId);
+      const parent = nodes.find((n) => n.id === active.parentId && n.section === activeTab);
       if (parent) return { id: parent.id, label: parent.title };
     }
     return { id: null as string | null, label: '根目录' };
-  }, [nodes, activeNodeId]);
+  }, [nodes, activeNodeId, activeTab]);
 
   const moveFolderOptions = useMemo<MoveFolderOption[]>(() => {
     const opts: MoveFolderOption[] = [{ id: null, title: '根目录', depth: 0 }];
@@ -130,9 +145,9 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         if (it.children.length > 0) walk(it.children, depth + 1);
       }
     };
-    walk(tree, 1);
+    walk(currentTree, 1);
     return opts;
-  }, [tree, moveTarget]);
+  }, [currentTree, moveTarget]);
 
   // 防止拖入外部文件时浏览器直接打开文件导致离开应用
   useEffect(() => {
@@ -422,11 +437,21 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
     window.addEventListener('keydown', onKeyDown);
   };
 
-  const handleCreate = async (nodeType: NodeType, explicitParentId?: string | null) => {
+  const handleCreate = async (
+    nodeType: NodeType,
+    explicitParentId?: string | null,
+    explicitSection?: WorkspaceSection
+  ) => {
+    const targetSection: WorkspaceSection = explicitSection ?? activeTab;
     const parentId = explicitParentId !== undefined ? explicitParentId : activeCreateTarget.id;
     const defaultTitle =
       nodeType === 'folder' ? '新建目录' : nodeType === 'markdown' ? '未命名 Markdown' : '未命名笔记';
-    const res = await api.createNode({ parentId, title: defaultTitle, nodeType });
+    const res = await api.createNode({
+      parentId,
+      title: defaultTitle,
+      nodeType,
+      section: targetSection,
+    });
     await loadTree();
     if (parentId && !expandedIds[parentId]) toggleExpand(parentId);
     selectNode(res.node.id);
@@ -443,10 +468,12 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
           const text = await file.text();
           const html = markdownToHtml(text);
+          const targetParent = activeTab === 'notes' ? parentId : null;
           const created = await api.createNode({
-            parentId,
+            parentId: targetParent,
             title: file.name.replace(/\.(md|markdown)$/i, ''),
             nodeType: 'markdown',
+            section: 'notes',
             contentHtml: html,
             plainText: text,
           });
@@ -463,10 +490,12 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
             ? 'pdf'
             : 'docx';
 
+        const targetParent = activeTab === 'docs' ? parentId : null;
         const created = await api.createNode({
-          parentId,
+          parentId: targetParent,
           title: file.name,
           nodeType,
+          section: 'docs',
         });
 
         const hash = await sha256File(file);
@@ -679,7 +708,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         ref={fileInputRef}
         type="file"
         multiple
-        accept=".md,.markdown,.docx,.doc,.xlsx,.xls,.pdf"
+        accept={activeTab === 'notes' ? '.md,.markdown' : '.docx,.doc,.xlsx,.xls,.pdf'}
         onChange={handleFileSelected}
         className="hidden"
       />
@@ -698,34 +727,67 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           <kbd className="px-1 py-0.5 text-[10px] bg-slate-100 dark:bg-neutral-800 rounded">Ctrl+K</kbd>
         </button>
 
-        <div className="grid grid-cols-3 gap-1.5">
+        {/* 笔记 / 文档 独立目录 Tab 切换 */}
+        <div className="grid grid-cols-2 p-0.5 rounded-lg bg-slate-200/70 dark:bg-neutral-900 border border-slate-200/80 dark:border-neutral-800">
           <button
             type="button"
-            onClick={() => void handleCreate('note')}
-            className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-blue-600 hover:bg-blue-700 text-white"
-            title={`在「${activeCreateTarget.label}」下新建笔记`}
+            onClick={() => setActiveTab('notes')}
+            className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors ${
+              activeTab === 'notes'
+                ? 'bg-white dark:bg-black text-blue-600 dark:text-blue-400 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+            }`}
           >
-            <Plus className="w-3.5 h-3.5" />
-            笔记
+            <BookOpen className="w-3.5 h-3.5" />
+            <span>笔记</span>
+            <span className="text-[10px] opacity-70">{noteCount}</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('docs')}
+            className={`flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors ${
+              activeTab === 'docs'
+                ? 'bg-white dark:bg-black text-blue-600 dark:text-blue-400 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+            }`}
+          >
+            <Files className="w-3.5 h-3.5" />
+            <span>文档</span>
+            <span className="text-[10px] opacity-70">{docCount}</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-1.5">
+          {activeTab === 'notes' ? (
+            <button
+              type="button"
+              onClick={() => void handleCreate('note')}
+              className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-blue-600 hover:bg-blue-700 text-white"
+              title={`在「${activeCreateTarget.label}」下新建笔记`}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              新建笔记
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => triggerUpload()}
+              className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+              title={`上传文档到「${activeCreateTarget.label}」`}
+            >
+              <Upload className="w-3.5 h-3.5" />
+              {uploading ? '上传中...' : '上传文档'}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void handleCreate('folder')}
             className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-800"
-            title={`在「${activeCreateTarget.label}」下新建子目录`}
+            title={`在「${activeCreateTarget.label}」下新建${activeTab === 'docs' ? '文档' : '笔记'}目录`}
           >
             <FolderPlus className="w-3.5 h-3.5" />
-            目录
-          </button>
-          <button
-            type="button"
-            disabled={uploading}
-            onClick={() => triggerUpload()}
-            className="flex items-center justify-center gap-1 py-1.5 text-xs font-medium rounded-md bg-white dark:bg-neutral-900 border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-800 disabled:opacity-50"
-            title={`上传文档到「${activeCreateTarget.label}」`}
-          >
-            <Upload className="w-3.5 h-3.5" />
-            {uploading ? '上传中' : '上传'}
+            新建目录
           </button>
         </div>
 
@@ -791,14 +853,24 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           }}
           onDrop={(e) => void handleFileDropOnRoot(e)}
         >
-          {tree.length === 0 ? (
+          {currentTree.length === 0 ? (
             <div className="px-4 py-8 text-center text-xs text-slate-400 leading-relaxed">
-              还没有任何笔记或文档
-              <br />
-              点击上方按钮，或直接把文件拖入此处上传
+              {activeTab === 'notes' ? (
+                <>
+                  还没有任何笔记
+                  <br />
+                  点击上方「新建笔记」或「新建目录」开始记录
+                </>
+              ) : (
+                <>
+                  还没有任何文档
+                  <br />
+                  点击上方「上传文档」或直接把 Word / Excel / PDF 拖入此处
+                </>
+              )}
             </div>
           ) : (
-            tree.map((node) => renderItem(node, 0))
+            currentTree.map((node) => renderItem(node, 0))
           )}
         </div>
       </div>
@@ -859,41 +931,44 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         >
           {contextMenu.node ? (
             <>
+              {activeTab === 'notes' ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const n = contextMenu.node!;
+                    setContextMenu(null);
+                    void handleCreate('note', n.id, 'notes');
+                  }}
+                  className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
+                >
+                  <Plus className="w-3.5 h-3.5 text-blue-600" />
+                  新建子笔记
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const n = contextMenu.node!;
+                    setContextMenu(null);
+                    triggerUpload(n.id);
+                  }}
+                  className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
+                >
+                  <Upload className="w-3.5 h-3.5 text-emerald-600" />
+                  上传文档到此目录
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
                   const n = contextMenu.node!;
                   setContextMenu(null);
-                  void handleCreate('note', n.id);
-                }}
-                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
-              >
-                <Plus className="w-3.5 h-3.5 text-blue-600" />
-                新建子笔记
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const n = contextMenu.node!;
-                  setContextMenu(null);
-                  void handleCreate('folder', n.id);
+                  void handleCreate('folder', n.id, activeTab);
                 }}
                 className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
                 <FolderPlus className="w-3.5 h-3.5 text-slate-500" />
                 新建子目录
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const n = contextMenu.node!;
-                  setContextMenu(null);
-                  triggerUpload(n.id);
-                }}
-                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
-              >
-                <Upload className="w-3.5 h-3.5 text-emerald-600" />
-                上传文档到此目录
               </button>
               <div className="my-1 border-t border-slate-100 dark:border-neutral-800" />
               <button
@@ -965,45 +1040,48 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
             </>
           ) : (
             <>
+              {activeTab === 'notes' ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setContextMenu(null);
+                    void handleCreate('note', null, 'notes');
+                  }}
+                  className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
+                >
+                  <Plus className="w-3.5 h-3.5 text-blue-600" />
+                  新建顶级笔记
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setContextMenu(null);
+                    triggerUpload(null);
+                  }}
+                  className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
+                >
+                  <Upload className="w-3.5 h-3.5 text-emerald-600" />
+                  上传文档到根目录
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
                   setContextMenu(null);
-                  void handleCreate('note', null);
-                }}
-                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
-              >
-                <Plus className="w-3.5 h-3.5 text-blue-600" />
-                新建顶级笔记
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setContextMenu(null);
-                  void handleCreate('folder', null);
+                  void handleCreate('folder', null, activeTab);
                 }}
                 className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
                 <FolderPlus className="w-3.5 h-3.5 text-slate-500" />
                 新建顶级目录
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setContextMenu(null);
-                  triggerUpload(null);
-                }}
-                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-neutral-900"
-              >
-                <Upload className="w-3.5 h-3.5 text-emerald-600" />
-                上传文档到根目录
-              </button>
               <div className="my-1 border-t border-slate-100 dark:border-neutral-800" />
               <button
                 type="button"
                 onClick={() => {
                   setContextMenu(null);
-                  setAllExpanded(true);
+                  setAllExpanded(true, activeTab);
                 }}
                 className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
@@ -1013,7 +1091,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
                 type="button"
                 onClick={() => {
                   setContextMenu(null);
-                  setAllExpanded(false);
+                  setAllExpanded(false, activeTab);
                 }}
                 className="w-full px-3 py-1.5 text-left hover:bg-slate-100 dark:hover:bg-neutral-900"
               >
