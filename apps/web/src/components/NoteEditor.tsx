@@ -123,7 +123,20 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
       saveVersion: 'auto' | 'manual' = 'auto',
       includeTitle?: string
     ) => {
-      const { contentHtml, plainText } = serializeCanvasBlocks(blocksToSave);
+      // 同步时自动清理没有任何内容的空文本框（若全部为空则保留 1 个以便继续输入）
+      const nonEmpty = blocksToSave.filter((b) => !isBlockHtmlEmpty(b.html));
+      const cleanedBlocks = nonEmpty.length > 0 ? nonEmpty : blocksToSave.slice(0, 1);
+
+      if (cleanedBlocks.length !== blocksToSave.length) {
+        setBlocks(cleanedBlocks);
+        latestBlocksRef.current = cleanedBlocks;
+        lastCommittedSnapshotRef.current = cloneBlocks(cleanedBlocks);
+        setActiveBlockId((cur) =>
+          cleanedBlocks.some((b) => b.id === cur) ? cur : cleanedBlocks[0]?.id ?? null
+        );
+      }
+
+      const { contentHtml, plainText } = serializeCanvasBlocks(cleanedBlocks);
       await api.updateNode(targetNodeId, {
         ...(includeTitle ? { title: includeTitle } : {}),
         contentHtml,
@@ -463,7 +476,10 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           },
         ];
         pushCanvasSnapshot(prev, next);
-        scheduleSave(next, true, 'auto');
+        // 仅当新建的文本框带初始内容（如拖入图片）时才立即同步；空白框等输入后再同步
+        if (!isBlockHtmlEmpty(initialHtml)) {
+          scheduleSave(next, true, 'auto');
+        }
         return next;
       });
       setActiveBlockId(newId);

@@ -663,54 +663,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
           <span className="truncate flex-1 min-w-0">{item.title}</span>
           {item.isPinned && <Pin className="w-3 h-3 text-amber-500 shrink-0" />}
 
-          {/* 绝对定位悬浮操作栏：拖拽期间隐藏，彻底消除悬停抖动 */}
-          {!pointerDrag && (
-            <div
-              className={`absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 pl-3 pr-1 py-0.5 rounded-md transition-opacity ${
-                isActive
-                  ? 'bg-blue-100/95 dark:bg-blue-900/95'
-                  : 'bg-slate-200/95 dark:bg-neutral-900/95'
-              } ${
-                touchFriendly && isActive
-                  ? 'opacity-100 pointer-events-auto'
-                  : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
-              }`}
-            >
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void handleCreate('note', item.id);
-                }}
-                className="p-1 rounded hover:bg-slate-300/70 dark:hover:bg-neutral-800"
-                title="新建子笔记"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  triggerUpload(item.id);
-                }}
-                className="p-1 rounded hover:bg-slate-300/70 dark:hover:bg-neutral-800"
-                title="上传文档到此节点下"
-              >
-                <Upload className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setDeleteTarget({ id: item.id, title: item.title });
-                }}
-                className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-950/60 text-slate-500 hover:text-red-600"
-                title="移至回收站"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
+
         </div>
 
         {isExpanded && item.children.length > 0 && (

@@ -74,6 +74,27 @@ function mapNoteVersionDetail(row: NoteVersionRow): NoteVersionDetail {
   };
 }
 
+function extractNoteContentSignature(html: string): string {
+  const trimmed = (html || '').trim();
+  if (!trimmed) return '';
+  // 剥离画布文本块的坐标、宽高与层级属性，仅比较实际文本/图片/表格内容
+  if (trimmed.includes('data-yunshu-canvas="1"')) {
+    const blocks: string[] = [];
+    const regex = /<section\b[^>]*data-canvas-block="1"[^>]*>([\s\S]*?)<\/section>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(trimmed)) !== null) {
+      const inner = (m[1] || '').trim();
+      const hasMedia = /<img\b|<table\b/i.test(inner);
+      const plain = inner.replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, '').trim();
+      if (hasMedia || plain.length > 0) {
+        blocks.push(inner);
+      }
+    }
+    return blocks.join('\n---\n');
+  }
+  return trimmed;
+}
+
 function pruneExpiredNoteVersions(userId: string): void {
   db.prepare(
     `DELETE FROM note_versions
@@ -115,8 +136,17 @@ function recordNoteVersion(
     changeSource !== 'before_restore' &&
     latest &&
     latest.title === title &&
-    latest.content_html === contentHtml
+    (latest.content_html === contentHtml ||
+      extractNoteContentSignature(latest.content_html) === extractNoteContentSignature(contentHtml))
   ) {
+    // 仅文本框位置/大小变化而内容未变时，不生成新版本，仅原地刷新最新布局
+    if (latest.content_html !== contentHtml) {
+      db.prepare('UPDATE note_versions SET content_html = ?, plain_text = ? WHERE id = ?').run(
+        contentHtml,
+        plainText,
+        latest.id
+      );
+    }
     return latest.version;
   }
 
