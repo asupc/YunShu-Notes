@@ -549,7 +549,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
     URL.revokeObjectURL(url);
   };
 
-  const handleCanvasSingleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleCanvasDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
     if (target.closest('[data-canvas-box="1"]')) return;
@@ -672,7 +672,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
             type="button"
             onClick={handleToolbarAddBlock}
             className="inline-flex items-center gap-1 px-2 py-1.5 sm:py-1 rounded bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 text-xs font-medium shrink-0 mr-1"
-            title="在画布上新增一个独立文本区域（也可直接点击空白处）"
+            title="在画布上新增一个独立文本区域（也可直接双击空白处）"
           >
             <PlusSquare className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">文本框</span>
@@ -843,7 +843,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           className="flex-1 min-w-0 text-2xl sm:text-3xl font-bold bg-transparent outline-none text-slate-900 dark:text-slate-100"
         />
         <span className="hidden md:inline text-[11px] text-slate-400 dark:text-neutral-600 shrink-0 select-none">
-          点击空白处新建文本框 · 拖动顶栏移位 · 拖边框改大小
+          双击空白处新建文本框 · 拖动顶栏移位 · 拖边框改大小
         </span>
       </div>
 
@@ -851,7 +851,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
       <div
         ref={canvasScrollRef}
         className="flex-1 w-full overflow-auto bg-white dark:bg-black"
-        onClick={handleCanvasSingleClick}
+        onDoubleClick={handleCanvasDoubleClick}
         onDragOver={(e) => {
           if (Array.from(e.dataTransfer.types).includes('Files')) {
             e.preventDefault();

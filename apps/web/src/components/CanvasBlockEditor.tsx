@@ -66,7 +66,7 @@ export const CanvasBlockEditor: React.FC<CanvasBlockEditorProps> = ({
       TableCell,
       ResizableImage.configure({ inline: false, allowBase64: true }),
       Placeholder.configure({
-        placeholder: '输入内容，支持 Markdown、表格、Ctrl+V 粘贴图片（点击空白处可新建文本框）...',
+        placeholder: '输入内容，支持 Markdown、表格、Ctrl+V 粘贴图片（双击空白处可新建文本框）...',
       }),
     ],
     content: block.html || '',
