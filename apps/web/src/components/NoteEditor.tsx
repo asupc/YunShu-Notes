@@ -35,6 +35,13 @@ interface Props {
 
 const MAX_CANVAS_HISTORY = 100;
 
+function isBlockHtmlEmpty(html: string): boolean {
+  if (!html) return true;
+  if (/<img\b|<table\b/i.test(html)) return false;
+  const text = html.replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, '').trim();
+  return text.length === 0;
+}
+
 function cloneBlocks(list: CanvasBlock[]): CanvasBlock[] {
   return list.map((b) => ({ ...b }));
 }
@@ -351,10 +358,16 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
     setActiveBlockId(blockId);
     setToolbarTick((t) => t + 1);
     setBlocks((prev) => {
-      const maxZ = prev.reduce((m, b) => Math.max(m, b.zIndex), 1);
-      const target = prev.find((b) => b.id === blockId);
-      if (!target || target.zIndex === maxZ) return prev;
-      return prev.map((b) => (b.id === blockId ? { ...b, zIndex: maxZ + 1 } : b));
+      // 聚焦到其他文本框时，自动清理之前未输入任何内容的临时空框（至少保留当前聚焦框）
+      const cleaned =
+        prev.length > 1
+          ? prev.filter((b) => b.id === blockId || !isBlockHtmlEmpty(b.html))
+          : prev;
+      const list = cleaned.length > 0 ? cleaned : prev;
+      const maxZ = list.reduce((m, b) => Math.max(m, b.zIndex), 1);
+      const target = list.find((b) => b.id === blockId);
+      if (list.length === prev.length && (!target || target.zIndex === maxZ)) return prev;
+      return list.map((b) => (b.id === blockId ? { ...b, zIndex: maxZ + 1 } : b));
     });
   }, []);
 
@@ -434,9 +447,11 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
       const defaultW = Math.min(420, Math.max(240, viewportW - 48));
       const newId = createBlockId();
       setBlocks((prev) => {
-        const maxZ = prev.reduce((m, b) => Math.max(m, b.zIndex), 1);
+        // 先清理此前遗留的纯空白文本框，避免随手点击空白处产生多余空框
+        const nonEmpty = prev.filter((b) => !isBlockHtmlEmpty(b.html));
+        const maxZ = nonEmpty.reduce((m, b) => Math.max(m, b.zIndex), 1);
         const next: CanvasBlock[] = [
-          ...prev,
+          ...nonEmpty,
           {
             id: newId,
             x: Math.max(0, Math.round(x)),
@@ -518,24 +533,24 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
     URL.revokeObjectURL(url);
   };
 
-  const handleCanvasDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleCanvasSingleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
     const target = e.target as HTMLElement;
     if (target.closest('[data-canvas-box="1"]')) return;
+    // 忽略点击在滚动条上的情况
+    const scroller = canvasScrollRef.current;
+    if (scroller) {
+      const sRect = scroller.getBoundingClientRect();
+      if (e.clientX >= sRect.left + scroller.clientWidth || e.clientY >= sRect.top + scroller.clientHeight) {
+        return;
+      }
+    }
     const stage = canvasStageRef.current;
     if (!stage) return;
     const rect = stage.getBoundingClientRect();
     const x = Math.max(0, e.clientX - rect.left - 16);
     const y = Math.max(0, e.clientY - rect.top - 12);
     addBlockAt(x, y);
-  };
-
-  const handleCanvasSingleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const target = e.target as HTMLElement;
-    if (target.closest('[data-canvas-box="1"]')) return;
-    if (blocks.length === 1) {
-      const onlyEd = editorsRef.current.get(blocks[0].id);
-      onlyEd?.commands.focus('end');
-    }
   };
 
   const handleCanvasDrop = async (e: React.DragEvent<HTMLDivElement>) => {
@@ -641,7 +656,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
             type="button"
             onClick={handleToolbarAddBlock}
             className="inline-flex items-center gap-1 px-2 py-1.5 sm:py-1 rounded bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 text-xs font-medium shrink-0 mr-1"
-            title="在画布上新增一个独立文本区域（也可直接双击空白处）"
+            title="在画布上新增一个独立文本区域（也可直接点击空白处）"
           >
             <PlusSquare className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">文本框</span>
@@ -812,7 +827,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           className="flex-1 min-w-0 text-2xl sm:text-3xl font-bold bg-transparent outline-none text-slate-900 dark:text-slate-100"
         />
         <span className="hidden md:inline text-[11px] text-slate-400 dark:text-neutral-600 shrink-0 select-none">
-          双击空白处新建文本框 · 拖动顶栏移位 · 拖边框改大小
+          点击空白处新建文本框 · 拖动顶栏移位 · 拖边框改大小
         </span>
       </div>
 
@@ -821,7 +836,6 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
         ref={canvasScrollRef}
         className="flex-1 w-full overflow-auto bg-white dark:bg-black"
         onClick={handleCanvasSingleClick}
-        onDoubleClick={handleCanvasDoubleClick}
         onDragOver={(e) => {
           if (Array.from(e.dataTransfer.types).includes('Files')) {
             e.preventDefault();
