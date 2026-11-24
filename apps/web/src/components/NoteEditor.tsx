@@ -17,7 +17,8 @@ import {
   Undo2,
 } from 'lucide-react';
 import type { NodeMeta } from '@yunshu/shared';
-import { api } from '../lib/api';
+import { api, isOfflineError } from '../lib/api';
+import { getPendingUpdateForNode, isTempNodeId, loadCachedNoteContent, saveCachedNoteContent } from '../lib/offlineCache';
 import {
   createBlockId,
   exportCanvasToMarkdown,
@@ -67,7 +68,10 @@ function blocksEqual(a: CanvasBlock[], b: CanvasBlock[]): boolean {
 
 export const NoteEditor: React.FC<Props> = ({ node }) => {
   const loadTree = useAppStore((s) => s.loadTree);
+  const isOffline = useAppStore((s) => s.isOffline);
   const markSyncedNow = useAppStore((s) => s.markSyncedNow);
+  const markOffline = useAppStore((s) => s.markOffline);
+  const applyLocalUpdateNode = useAppStore((s) => s.applyLocalUpdateNode);
   const showTip = useAppStore((s) => s.showTip);
 
   const [title, setTitle] = useState(node.title);
@@ -75,7 +79,7 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
   const [loadedNodeId, setLoadedNodeId] = useState<string | null>(null);
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null);
   const [autoFocusBlockId, setAutoFocusBlockId] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<'synced' | 'saving'>('synced');
+  const [saveState, setSaveState] = useState<'synced' | 'saving' | 'offline_saved'>('synced');
   const [uploadingImg, setUploadingImg] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [externalSyncToken, setExternalSyncToken] = useState(0);
@@ -134,16 +138,44 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
       }
 
       const { contentHtml, plainText } = serializeCanvasBlocks(cleanedBlocks);
-      await api.updateNode(targetNodeId, {
+      const effectiveTitle = includeTitle || latestTitleRef.current.trim() || node.title;
+
+      // 先落盘到本地缓存，确保随时断网或重启都不丢数据
+      saveCachedNoteContent(targetNodeId, {
+        title: effectiveTitle,
+        contentHtml,
+        plainText,
+        updatedAt: new Date().toISOString(),
+      });
+
+      const payload = {
         ...(includeTitle ? { title: includeTitle } : {}),
         contentHtml,
         plainText,
         saveVersion,
-      });
-      setSaveState('synced');
-      markSyncedNow();
+      };
+
+      if (useAppStore.getState().isOffline || isTempNodeId(targetNodeId)) {
+        applyLocalUpdateNode(targetNodeId, payload, true);
+        setSaveState('offline_saved');
+        return;
+      }
+
+      try {
+        await api.updateNode(targetNodeId, payload);
+        setSaveState('synced');
+        markSyncedNow();
+      } catch (err) {
+        if (isOfflineError(err)) {
+          applyLocalUpdateNode(targetNodeId, payload, true);
+          markOffline('无法连接服务端，修改已保存到本地，将在恢复后自动同步');
+          setSaveState('offline_saved');
+        } else {
+          showTip(err instanceof Error ? err.message : '保存笔记失败', 'error');
+        }
+      }
     },
-    [markSyncedNow]
+    [applyLocalUpdateNode, markOffline, markSyncedNow, node.title, showTip]
   );
 
   const scheduleSave = useCallback(
@@ -188,17 +220,60 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
 
     let cancelled = false;
     void (async () => {
-      const detail = await api.getNode(node.id);
-      if (cancelled) return;
       const viewportW = canvasScrollRef.current?.clientWidth || 860;
       const defaultBlockW = Math.max(300, Math.min(820, viewportW - 64));
-      const parsed = parseCanvasHtml(detail.contentHtml || '', defaultBlockW);
+      const cached = loadCachedNoteContent(node.id);
+      const pending = getPendingUpdateForNode(node.id);
+
+      let resolvedHtml = cached?.contentHtml ?? '';
+      let resolvedTitle = cached?.title ?? node.title;
+      let loadedOffline = false;
+
+      if (isTempNodeId(node.id) || useAppStore.getState().isOffline) {
+        loadedOffline = true;
+      } else {
+        try {
+          const detail = await api.getNode(node.id);
+          if (cancelled) return;
+          resolvedHtml = detail.contentHtml || '';
+          resolvedTitle = detail.node.title || node.title;
+          // 无本地待同步改动时，用服务端最新内容刷新本地缓存
+          if (!pending) {
+            saveCachedNoteContent(node.id, {
+              title: resolvedTitle,
+              contentHtml: resolvedHtml,
+              plainText: detail.plainText || '',
+              updatedAt: detail.node.updatedAt || new Date().toISOString(),
+            });
+          }
+        } catch (err) {
+          if (cancelled) return;
+          if (isOfflineError(err)) {
+            loadedOffline = true;
+            markOffline('服务端暂不可达，正在使用本地缓存离线编辑');
+            if (!cached) {
+              showTip('该笔记尚未缓存到本地，暂为空白（连接恢复后将自动同步）');
+            }
+          } else {
+            showTip(err instanceof Error ? err.message : '加载笔记失败', 'error');
+            return;
+          }
+        }
+      }
+
+      if (cancelled) return;
+      // 若本地存在尚未同步的离线修改，优先展示本地最新修改防止覆盖
+      if (pending?.contentHtml !== undefined) resolvedHtml = pending.contentHtml;
+      if (pending?.title !== undefined) resolvedTitle = pending.title;
+
+      const parsed = parseCanvasHtml(resolvedHtml, defaultBlockW);
+      setTitle(resolvedTitle);
       setBlocks(parsed);
       latestBlocksRef.current = parsed;
       lastCommittedSnapshotRef.current = cloneBlocks(parsed);
       setActiveBlockId(parsed[0]?.id ?? null);
       setLoadedNodeId(node.id);
-      setSaveState('synced');
+      setSaveState(loadedOffline || pending ? 'offline_saved' : 'synced');
       setToolbarTick((t) => t + 1);
     })();
 
@@ -520,8 +595,28 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
   const handleTitleBlur = async () => {
     const trimmed = title.trim();
     if (!trimmed || trimmed === node.title) return;
-    await api.updateNode(node.id, { title: trimmed });
-    await loadTree();
+    const { contentHtml, plainText } = serializeCanvasBlocks(latestBlocksRef.current);
+    saveCachedNoteContent(node.id, {
+      title: trimmed,
+      contentHtml,
+      plainText,
+      updatedAt: new Date().toISOString(),
+    });
+    if (useAppStore.getState().isOffline || isTempNodeId(node.id)) {
+      applyLocalUpdateNode(node.id, { title: trimmed }, true);
+      setSaveState('offline_saved');
+      return;
+    }
+    try {
+      await api.updateNode(node.id, { title: trimmed });
+      await loadTree();
+    } catch (err) {
+      if (isOfflineError(err)) {
+        applyLocalUpdateNode(node.id, { title: trimmed }, true);
+        markOffline('无法连接服务端，标题修改已保存到本地');
+        setSaveState('offline_saved');
+      }
+    }
   };
 
   const handleImagePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -796,12 +891,18 @@ export const NoteEditor: React.FC<Props> = ({ node }) => {
           {uploadingImg && <span className="text-blue-600 dark:text-blue-400">图片上传中...</span>}
           <span
             className={`px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${
-              saveState === 'synced'
+              saveState === 'synced' && !isOffline
                 ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                : saveState === 'offline_saved' || isOffline
+                ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/70 dark:text-amber-300'
                 : 'bg-amber-50 text-amber-700'
             }`}
           >
-            {saveState === 'synced' ? '● 已同步' : '○ 保存中...'}
+            {saveState === 'saving'
+              ? '○ 保存中...'
+              : saveState === 'offline_saved' || isOffline
+              ? '● 已本地保存'
+              : '● 已同步'}
           </span>
           <button
             type="button"

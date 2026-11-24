@@ -80,13 +80,32 @@ export async function testApiBase(value: string): Promise<{ status: string; serv
   }
 }
 
-function getToken(): string | null {
+export function getToken(): string | null {
   return localStorage.getItem('yunshu_token');
 }
 
 export function setToken(token: string | null): void {
   if (token) localStorage.setItem('yunshu_token', token);
   else localStorage.removeItem('yunshu_token');
+}
+
+export type ApiError = Error & {
+  status?: number;
+  payload?: unknown;
+  isNetworkError?: boolean;
+};
+
+export function isOfflineError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as ApiError;
+  if (e.status === 401 || e.status === 403 || e.status === 400 || e.status === 404 || e.status === 409) {
+    return false;
+  }
+  if (e.isNetworkError) return true;
+  if (typeof e.status === 'number' && (e.status === 0 || e.status >= 500)) return true;
+  if (err instanceof TypeError) return true;
+  if (err instanceof DOMException && err.name === 'AbortError') return true;
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -97,12 +116,33 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${getApiBase()}${path}`, { ...init, headers });
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 12000);
+  let res: Response;
+  try {
+    res = await fetch(`${getApiBase()}${path}`, {
+      ...init,
+      headers,
+      signal: init?.signal ?? controller.signal,
+    });
+  } catch (err) {
+    const netErr = new Error(
+      err instanceof DOMException && err.name === 'AbortError'
+        ? '连接服务端超时，已切换离线模式'
+        : '无法连接服务端，已切换离线模式'
+    ) as ApiError;
+    netErr.isNetworkError = true;
+    throw netErr;
+  } finally {
+    window.clearTimeout(timer);
+  }
+
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = new Error((data as { error?: string }).error ?? `请求失败（HTTP ${res.status}）`);
-    (err as Error & { status?: number; payload?: unknown }).status = res.status;
-    (err as Error & { status?: number; payload?: unknown }).payload = data;
+    const err = new Error((data as { error?: string }).error ?? `请求失败（HTTP ${res.status}）`) as ApiError;
+    err.status = res.status;
+    err.payload = data;
+    if (res.status >= 500) err.isNetworkError = true;
     throw err;
   }
   return data as T;

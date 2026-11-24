@@ -26,12 +26,15 @@ export const App: React.FC = () => {
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
   const mobileDrawerOpen = useAppStore((s) => s.mobileDrawerOpen);
   const syncing = useAppStore((s) => s.syncing);
+  const isOffline = useAppStore((s) => s.isOffline);
+  const pendingCount = useAppStore((s) => s.pendingCount);
   const lastSyncedAt = useAppStore((s) => s.lastSyncedAt);
   const syncError = useAppStore((s) => s.syncError);
   const statusTip = useAppStore((s) => s.statusTip);
 
   const initAuth = useAppStore((s) => s.initAuth);
   const manualSync = useAppStore((s) => s.manualSync);
+  const tryReconnect = useAppStore((s) => s.tryReconnect);
   const setSidebarOpen = useAppStore((s) => s.setSidebarOpen);
   const setMobileDrawerOpen = useAppStore((s) => s.setMobileDrawerOpen);
   const setSearchOpen = useAppStore((s) => s.setSearchOpen);
@@ -50,8 +53,30 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
     void initAuth();
-  }, [initAuth, theme]);
+  }, [initAuth]);
+
+  // 离线或存在未同步本地修改时：每 15 秒定时尝试连接服务端并自动同步，同时监听网络恢复事件
+  useEffect(() => {
+    if (!user) return;
+    if (!isOffline && pendingCount === 0) return;
+
+    const onOnline = () => {
+      void tryReconnect(false);
+    };
+    window.addEventListener('online', onOnline);
+    const timer = window.setInterval(() => {
+      void tryReconnect(true);
+    }, 15000);
+
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.clearInterval(timer);
+    };
+  }, [user, isOffline, pendingCount, tryReconnect]);
 
   useEffect(() => {
     if (isSplitLayout && mobileDrawerOpen) {
@@ -204,14 +229,29 @@ export const App: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2.5 shrink-0 text-xs">
-          <span
-            className={`hidden sm:inline whitespace-nowrap ${
-              syncError ? 'text-red-600' : 'text-slate-500 dark:text-slate-400'
-            }`}
-            title={lastSyncedAt ? `上次同步时间：${new Date(lastSyncedAt).toLocaleString('zh-CN')}` : '尚未同步'}
-          >
-            {syncing ? '同步中...' : syncError ? '同步失败' : `上次同步：${formatSyncTime(lastSyncedAt)}`}
-          </span>
+          {isOffline ? (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 whitespace-nowrap"
+              title="服务端暂不可达，每 15 秒自动重连并在恢复后同步本地修改"
+            >
+              ● 离线模式{pendingCount > 0 ? `（${pendingCount} 项待同步）` : ''}
+            </span>
+          ) : (
+            <span
+              className={`hidden sm:inline whitespace-nowrap ${
+                syncError ? 'text-red-600' : 'text-slate-500 dark:text-slate-400'
+              }`}
+              title={lastSyncedAt ? `上次同步时间：${new Date(lastSyncedAt).toLocaleString('zh-CN')}` : '尚未同步'}
+            >
+              {syncing
+                ? '同步中...'
+                : pendingCount > 0
+                ? `待同步：${pendingCount} 项`
+                : syncError
+                ? '同步失败'
+                : `上次同步：${formatSyncTime(lastSyncedAt)}`}
+            </span>
+          )}
 
           <button
             type="button"

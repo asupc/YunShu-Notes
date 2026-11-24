@@ -22,7 +22,8 @@ import {
   Upload,
 } from 'lucide-react';
 import type { NodeMeta, NodeTreeItem, NodeType, WorkspaceSection } from '@yunshu/shared';
-import { api, sha256File } from '../lib/api';
+import { api, isOfflineError, sha256File } from '../lib/api';
+import { isTempNodeId } from '../lib/offlineCache';
 import { markdownToHtml } from '../lib/markdown';
 import { useAppStore } from '../store/useAppStore';
 import { ConfirmDialog, MoveNodeDialog, RenameDialog, type MoveFolderOption } from './AppDialog';
@@ -92,6 +93,11 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
   const setSearchOpen = useAppStore((s) => s.setSearchOpen);
   const setUser = useAppStore((s) => s.setUser);
   const showTip = useAppStore((s) => s.showTip);
+  const markOffline = useAppStore((s) => s.markOffline);
+  const applyLocalCreateNode = useAppStore((s) => s.applyLocalCreateNode);
+  const applyLocalUpdateNode = useAppStore((s) => s.applyLocalUpdateNode);
+  const applyLocalMoveNode = useAppStore((s) => s.applyLocalMoveNode);
+  const applyLocalDeleteNode = useAppStore((s) => s.applyLocalDeleteNode);
 
   // 内部节点拖拽（基于 Pointer Events，兼容 Windows WebView2 / 浏览器 / 安卓触控）
   const [pointerDrag, setPointerDrag] = useState<PointerDragState | null>(null);
@@ -191,6 +197,13 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         showTip('不能将目录移动到自身或子目录下', 'error');
         return;
       }
+      if (useAppStore.getState().isOffline || isTempNodeId(sourceNode.id) || isTempNodeId(newParentId)) {
+        applyLocalMoveNode(sourceNode.id, newParentId);
+        if (newParentId && !useAppStore.getState().expandedIds[newParentId]) {
+          toggleExpand(newParentId);
+        }
+        return;
+      }
       try {
         await api.moveNode(sourceNode.id, { newParentId });
         if (newParentId && !useAppStore.getState().expandedIds[newParentId]) {
@@ -198,7 +211,15 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         }
         await loadTree();
       } catch (err) {
-        showTip(err instanceof Error ? err.message : '移动节点失败', 'error');
+        if (isOfflineError(err)) {
+          applyLocalMoveNode(sourceNode.id, newParentId);
+          if (newParentId && !useAppStore.getState().expandedIds[newParentId]) {
+            toggleExpand(newParentId);
+          }
+          markOffline('服务端暂不可达，目录调整已保存在本地');
+        } else {
+          showTip(err instanceof Error ? err.message : '移动节点失败', 'error');
+        }
       }
     },
     [loadTree, showTip, toggleExpand]
@@ -426,15 +447,42 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
     const parentId = explicitParentId ?? null;
     const defaultTitle =
       nodeType === 'folder' ? '新建目录' : nodeType === 'markdown' ? '未命名 Markdown' : '未命名笔记';
-    const res = await api.createNode({
-      parentId,
-      title: defaultTitle,
-      nodeType,
-      section: targetSection,
-    });
-    await loadTree();
-    if (parentId && !expandedIds[parentId]) toggleExpand(parentId);
-    selectNode(res.node.id);
+    if (useAppStore.getState().isOffline || isTempNodeId(parentId)) {
+      const created = applyLocalCreateNode({
+        parentId,
+        title: defaultTitle,
+        nodeType,
+        section: targetSection,
+      });
+      if (parentId && !expandedIds[parentId]) toggleExpand(parentId);
+      selectNode(created.id);
+      return;
+    }
+    try {
+      const res = await api.createNode({
+        parentId,
+        title: defaultTitle,
+        nodeType,
+        section: targetSection,
+      });
+      await loadTree();
+      if (parentId && !expandedIds[parentId]) toggleExpand(parentId);
+      selectNode(res.node.id);
+    } catch (err) {
+      if (isOfflineError(err)) {
+        const created = applyLocalCreateNode({
+          parentId,
+          title: defaultTitle,
+          nodeType,
+          section: targetSection,
+        });
+        markOffline('服务端暂不可达，已离线创建，恢复后将自动同步');
+        if (parentId && !expandedIds[parentId]) toggleExpand(parentId);
+        selectNode(created.id);
+      } else {
+        showTip(err instanceof Error ? err.message : '新建失败', 'error');
+      }
+    }
   };
 
   const uploadFilesToParent = async (files: FileList | File[], parentId: string | null) => {
@@ -531,23 +579,62 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
   const handleConfirmRename = async (nextTitle: string) => {
     if (!renameTarget) return;
     if (nextTitle !== renameTarget.title) {
-      await api.updateNode(renameTarget.id, { title: nextTitle });
-      await loadTree();
+      if (useAppStore.getState().isOffline || isTempNodeId(renameTarget.id)) {
+        applyLocalUpdateNode(renameTarget.id, { title: nextTitle }, true);
+      } else {
+        try {
+          await api.updateNode(renameTarget.id, { title: nextTitle });
+          await loadTree();
+        } catch (err) {
+          if (isOfflineError(err)) {
+            applyLocalUpdateNode(renameTarget.id, { title: nextTitle }, true);
+            markOffline('服务端暂不可达，重命名已保存在本地');
+          } else {
+            showTip(err instanceof Error ? err.message : '重命名失败', 'error');
+          }
+        }
+      }
     }
     setRenameTarget(null);
   };
 
   const handleConfirmDelete = async () => {
     if (!deleteTarget) return;
-    await api.deleteNode(deleteTarget.id);
-    if (activeNodeId === deleteTarget.id) selectNode(null);
+    const idToDelete = deleteTarget.id;
     setDeleteTarget(null);
-    await loadTree();
+    if (useAppStore.getState().isOffline || isTempNodeId(idToDelete)) {
+      applyLocalDeleteNode(idToDelete);
+      return;
+    }
+    try {
+      await api.deleteNode(idToDelete);
+      if (activeNodeId === idToDelete) selectNode(null);
+      await loadTree();
+    } catch (err) {
+      if (isOfflineError(err)) {
+        applyLocalDeleteNode(idToDelete);
+        markOffline('服务端暂不可达，删除操作已记录到本地');
+      } else {
+        showTip(err instanceof Error ? err.message : '删除失败', 'error');
+      }
+    }
   };
 
   const handleTogglePin = async (item: NodeTreeItem) => {
-    await api.updateNode(item.id, { isPinned: !item.isPinned });
-    await loadTree();
+    const nextPinned = !item.isPinned;
+    if (useAppStore.getState().isOffline || isTempNodeId(item.id)) {
+      applyLocalUpdateNode(item.id, { isPinned: nextPinned }, true);
+      return;
+    }
+    try {
+      await api.updateNode(item.id, { isPinned: nextPinned });
+      await loadTree();
+    } catch (err) {
+      if (isOfflineError(err)) {
+        applyLocalUpdateNode(item.id, { isPinned: nextPinned }, true);
+        markOffline('服务端暂不可达，置顶状态已保存在本地');
+      }
+    }
   };
 
   const handleMoveToRoot = async (item: NodeMeta) => {

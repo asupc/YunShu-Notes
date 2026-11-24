@@ -14,7 +14,8 @@ import {
   Upload,
 } from 'lucide-react';
 import type { NodeMeta, NodeType } from '@yunshu/shared';
-import { api, sha256File } from '../lib/api';
+import { api, isOfflineError, sha256File } from '../lib/api';
+import { isTempNodeId } from '../lib/offlineCache';
 import { markdownToHtml } from '../lib/markdown';
 import { useAppStore } from '../store/useAppStore';
 import { ConfirmDialog, RenameDialog } from './AppDialog';
@@ -94,6 +95,10 @@ export const FolderGridView: React.FC<{ folder: NodeMeta }> = ({ folder }) => {
   const toggleExpand = useAppStore((s) => s.toggleExpand);
   const loadTree = useAppStore((s) => s.loadTree);
   const showTip = useAppStore((s) => s.showTip);
+  const markOffline = useAppStore((s) => s.markOffline);
+  const applyLocalCreateNode = useAppStore((s) => s.applyLocalCreateNode);
+  const applyLocalUpdateNode = useAppStore((s) => s.applyLocalUpdateNode);
+  const applyLocalDeleteNode = useAppStore((s) => s.applyLocalDeleteNode);
 
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -137,10 +142,37 @@ export const FolderGridView: React.FC<{ folder: NodeMeta }> = ({ folder }) => {
   const handleCreate = async (nodeType: NodeType) => {
     const defaultTitle =
       nodeType === 'folder' ? '新建目录' : nodeType === 'markdown' ? '未命名 Markdown' : '未命名笔记';
-    const res = await api.createNode({ parentId: folder.id, title: defaultTitle, nodeType, section: folder.section });
-    await loadTree();
-    if (!expandedIds[folder.id]) toggleExpand(folder.id);
-    selectNode(res.node.id);
+    if (useAppStore.getState().isOffline || isTempNodeId(folder.id)) {
+      const created = applyLocalCreateNode({
+        parentId: folder.id,
+        title: defaultTitle,
+        nodeType,
+        section: folder.section,
+      });
+      if (!expandedIds[folder.id]) toggleExpand(folder.id);
+      selectNode(created.id);
+      return;
+    }
+    try {
+      const res = await api.createNode({ parentId: folder.id, title: defaultTitle, nodeType, section: folder.section });
+      await loadTree();
+      if (!expandedIds[folder.id]) toggleExpand(folder.id);
+      selectNode(res.node.id);
+    } catch (err) {
+      if (isOfflineError(err)) {
+        const created = applyLocalCreateNode({
+          parentId: folder.id,
+          title: defaultTitle,
+          nodeType,
+          section: folder.section,
+        });
+        markOffline('服务端暂不可达，已离线创建，恢复后将自动同步');
+        if (!expandedIds[folder.id]) toggleExpand(folder.id);
+        selectNode(created.id);
+      } else {
+        showTip(err instanceof Error ? err.message : '新建失败', 'error');
+      }
+    }
   };
 
   const uploadFilesHere = async (files: FileList | File[], targetFolderId: string) => {
@@ -228,17 +260,44 @@ export const FolderGridView: React.FC<{ folder: NodeMeta }> = ({ folder }) => {
   const handleConfirmRename = async (nextTitle: string) => {
     if (!renameTarget) return;
     if (nextTitle !== renameTarget.title) {
-      await api.updateNode(renameTarget.id, { title: nextTitle });
-      await loadTree();
+      if (useAppStore.getState().isOffline || isTempNodeId(renameTarget.id)) {
+        applyLocalUpdateNode(renameTarget.id, { title: nextTitle }, true);
+      } else {
+        try {
+          await api.updateNode(renameTarget.id, { title: nextTitle });
+          await loadTree();
+        } catch (err) {
+          if (isOfflineError(err)) {
+            applyLocalUpdateNode(renameTarget.id, { title: nextTitle }, true);
+            markOffline('服务端暂不可达，重命名已保存在本地');
+          } else {
+            showTip(err instanceof Error ? err.message : '重命名失败', 'error');
+          }
+        }
+      }
     }
     setRenameTarget(null);
   };
 
   const handleConfirmDelete = async () => {
     if (!deleteTarget) return;
-    await api.deleteNode(deleteTarget.id);
+    const idToDelete = deleteTarget.id;
     setDeleteTarget(null);
-    await loadTree();
+    if (useAppStore.getState().isOffline || isTempNodeId(idToDelete)) {
+      applyLocalDeleteNode(idToDelete);
+      return;
+    }
+    try {
+      await api.deleteNode(idToDelete);
+      await loadTree();
+    } catch (err) {
+      if (isOfflineError(err)) {
+        applyLocalDeleteNode(idToDelete);
+        markOffline('服务端暂不可达，删除操作已记录到本地');
+      } else {
+        showTip(err instanceof Error ? err.message : '删除失败', 'error');
+      }
+    }
   };
 
   return (
