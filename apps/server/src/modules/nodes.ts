@@ -366,7 +366,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // 笔记历史版本列表（仅保留最近 30 天）
-  app.get('/api/v1/nodes/:id/versions', async (req, reply) => {
+  app.get('/api/v1/nodes/:id/note-versions', async (req, reply) => {
     const auth = await requireAuth(req, reply);
     if (!auth) return;
     const { id } = req.params as { id: string };
@@ -392,7 +392,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // 查看单个历史版本完整内容
-  app.get('/api/v1/nodes/:id/versions/:versionId', async (req, reply) => {
+  app.get('/api/v1/nodes/:id/note-versions/:versionId', async (req, reply) => {
     const auth = await requireAuth(req, reply);
     if (!auth) return;
     const { id, versionId } = req.params as { id: string; versionId: string };
@@ -408,7 +408,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // 恢复到指定历史版本（恢复前自动备份当前内容）
-  app.post('/api/v1/nodes/:id/versions/:versionId/restore', async (req, reply) => {
+  app.post('/api/v1/nodes/:id/note-versions/:versionId/restore', async (req, reply) => {
     const auth = await requireAuth(req, reply);
     if (!auth) return;
     const { id, versionId } = req.params as { id: string; versionId: string };

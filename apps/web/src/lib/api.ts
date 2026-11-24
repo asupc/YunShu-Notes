@@ -165,11 +165,11 @@ export const api = {
 
   listNoteVersions: (nodeId: string) =>
     request<{ retentionDays: number; versions: NoteVersionSummary[] }>(
-      `/api/v1/nodes/${nodeId}/versions`
+      `/api/v1/nodes/${nodeId}/note-versions`
     ),
 
   getNoteVersion: (nodeId: string, versionId: string) =>
-    request<{ version: NoteVersionDetail }>(`/api/v1/nodes/${nodeId}/versions/${versionId}`),
+    request<{ version: NoteVersionDetail }>(`/api/v1/nodes/${nodeId}/note-versions/${versionId}`),
 
   restoreNoteVersion: (nodeId: string, versionId: string) =>
     request<{
@@ -177,7 +177,7 @@ export const api = {
       contentHtml: string;
       plainText: string;
       restoredFromVersion: number;
-    }>(`/api/v1/nodes/${nodeId}/versions/${versionId}/restore`, {
+    }>(`/api/v1/nodes/${nodeId}/note-versions/${versionId}/restore`, {
       method: 'POST',
       body: JSON.stringify({}),
     }),
