@@ -615,7 +615,11 @@ if [ "$BUILD_KIND" = "release" ]; then
     fi
     GRADLE_APP_FILE=src-tauri/gen/android/app/build.gradle.kts \
     GRADLE_ROOT_FILE=src-tauri/gen/android/build.gradle.kts \
+    ANDROID_MAIN_DIR=src-tauri/gen/android/app/src/main \
     MAVEN_MIRROR="$MAVEN_MIRROR" \
+    node /tmp/patch-gradle.js
+else
+    ANDROID_MAIN_DIR=src-tauri/gen/android/app/src/main \
     node /tmp/patch-gradle.js
 fi
 
@@ -819,10 +823,206 @@ function patchRootGradle(file) {
     }
 }
 
+function patchAndroidOfficeOpener(mainDir) {
+    const path = require('path');
+    const xmlDir = path.join(mainDir, 'res', 'xml');
+    fs.mkdirSync(xmlDir, { recursive: true });
+
+    // 1. FileProvider 路径配置（允许安全共享 app_cache_dir/office_workspace 给 WPS/Office）
+    const pathsXmlFile = path.join(xmlDir, 'yunshu_file_paths.xml');
+    const pathsXml = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<paths>',
+        '    <cache-path name="office_workspace" path="office_workspace/" />',
+        '    <cache-path name="app_cache" path="." />',
+        '    <files-path name="app_files" path="." />',
+        '    <external-cache-path name="ext_cache" path="." />',
+        '</paths>',
+        ''
+    ].join('\n');
+    if (!fs.existsSync(pathsXmlFile) || fs.readFileSync(pathsXmlFile, 'utf8') !== pathsXml) {
+        fs.writeFileSync(pathsXmlFile, pathsXml);
+        console.log('==> 已写入 Android FileProvider 路径配置：' + pathsXmlFile);
+    }
+
+    // 2. AndroidManifest.xml 注入 FileProvider 与 Android 11+ <queries>（支持 WPS 与系统文档应用）
+    const manifestFile = path.join(mainDir, 'AndroidManifest.xml');
+    if (fs.existsSync(manifestFile)) {
+        let manifest = fs.readFileSync(manifestFile, 'utf8');
+        const originalManifest = manifest;
+
+        if (manifest.indexOf('yunshu.fileprovider') === -1) {
+            const providerXml = [
+                '        <provider',
+                '            android:name="androidx.core.content.FileProvider"',
+                '            android:authorities="${applicationId}.yunshu.fileprovider"',
+                '            android:exported="false"',
+                '            android:grantUriPermissions="true">',
+                '            <meta-data',
+                '                android:name="android.support.FILE_PROVIDER_PATHS"',
+                '                android:resource="@xml/yunshu_file_paths" />',
+                '        </provider>',
+                '    </application>'
+            ].join('\n');
+            manifest = manifest.replace('    </application>', providerXml);
+        }
+
+        if (manifest.indexOf('cn.wps.moffice_eng') === -1) {
+            const queriesXml = [
+                '    <queries>',
+                '        <package android:name="cn.wps.moffice_eng" />',
+                '        <package android:name="cn.wps.moffice_i18n" />',
+                '        <package android:name="com.kingsoft.moffice_pro" />',
+                '        <package android:name="com.microsoft.office.officehubrow" />',
+                '        <intent>',
+                '            <action android:name="android.intent.action.VIEW" />',
+                '            <data android:mimeType="*/*" />',
+                '        </intent>',
+                '    </queries>',
+                '</manifest>'
+            ].join('\n');
+            manifest = manifest.replace('</manifest>', queriesXml);
+        }
+
+        if (manifest !== originalManifest) {
+            fs.writeFileSync(manifestFile, manifest);
+            console.log('==> 已注入 Android FileProvider 与 WPS 查询权限：' + manifestFile);
+        }
+    }
+
+    // 3. 在 MainActivity.kt 中注册 WebView JS 桥接 YunShuAndroid.openLocalFile（通过 FileProvider + Intent 拉起 WPS）
+    const javaRoot = path.join(mainDir, 'java');
+    function findMainActivity(dir) {
+        if (!fs.existsSync(dir)) return null;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                const found = findMainActivity(full);
+                if (found) return found;
+            } else if (entry.name === 'MainActivity.kt') {
+                return full;
+            }
+        }
+        return null;
+    }
+
+    const mainActFile = findMainActivity(javaRoot);
+    if (mainActFile) {
+        const curSrc = fs.readFileSync(mainActFile, 'utf8');
+        const pkgMatch = curSrc.match(/^package\s+([^\r\n]+)/m);
+        const pkgLine = pkgMatch ? pkgMatch[0] : 'package com.yunshu.notes';
+
+        const nextSrc = [
+            pkgLine,
+            '',
+            'import android.app.Activity',
+            'import android.content.ClipData',
+            'import android.content.Intent',
+            'import android.content.pm.PackageManager',
+            'import android.webkit.JavascriptInterface',
+            'import android.webkit.MimeTypeMap',
+            'import android.webkit.WebView',
+            'import androidx.core.content.FileProvider',
+            'import java.io.File',
+            '',
+            'class MainActivity : TauriActivity() {',
+            '    override fun onWebViewCreate(webView: WebView) {',
+            '        super.onWebViewCreate(webView)',
+            '        webView.addJavascriptInterface(YunShuOfficeBridge(this), "YunShuAndroid")',
+            '    }',
+            '}',
+            '',
+            'private class YunShuOfficeBridge(private val activity: Activity) {',
+            '    @JavascriptInterface',
+            '    fun openLocalFile(filePath: String, mimeType: String): String {',
+            '        return try {',
+            '            val file = File(filePath)',
+            '            if (!file.exists()) {',
+            '                return "本地缓存文件不存在：$filePath"',
+            '            }',
+            '            val authority = "${activity.packageName}.yunshu.fileprovider"',
+            '            val uri = FileProvider.getUriForFile(activity, authority, file)',
+            '            val resolvedMime = resolveMimeType(file.name, mimeType)',
+            '            val grantFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION',
+            '',
+            '            val intent = Intent(Intent.ACTION_VIEW).apply {',
+            '                setDataAndType(uri, resolvedMime)',
+            '                addFlags(grantFlags or Intent.FLAG_ACTIVITY_NEW_TASK)',
+            '                clipData = ClipData.newRawUri(file.name, uri)',
+            '            }',
+            '',
+            '            val pm = activity.packageManager',
+            '            var targets = pm.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)',
+            '            if (targets.isEmpty()) {',
+            '                intent.setDataAndType(uri, "*/*")',
+            '                targets = pm.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)',
+            '            }',
+            '            if (targets.isEmpty()) {',
+            '                return "未检测到可打开此文档的应用，请先安装 WPS Office"',
+            '            }',
+            '',
+            '            // 显式向所有候选应用（含 WPS）授予读写权限，避免国产 ROM 报无权限',
+            '            for (info in targets) {',
+            '                activity.grantUriPermission(info.activityInfo.packageName, uri, grantFlags)',
+            '            }',
+            '',
+            '            // 若已安装 WPS，优先直达 WPS；否则交由系统选择器打开',
+            '            val wpsPackages = listOf("cn.wps.moffice_eng", "cn.wps.moffice_i18n", "com.kingsoft.moffice_pro")',
+            '            val wpsTarget = targets.firstOrNull { wpsPackages.contains(it.activityInfo.packageName) }',
+            '            activity.runOnUiThread {',
+            '                try {',
+            '                    if (wpsTarget != null) {',
+            '                        val wpsIntent = Intent(intent).apply {',
+            '                            setPackage(wpsTarget.activityInfo.packageName)',
+            '                        }',
+            '                        activity.startActivity(wpsIntent)',
+            '                    } else {',
+            '                        activity.startActivity(Intent.createChooser(intent, "选择应用打开文档"))',
+            '                    }',
+            '                } catch (_: Throwable) {',
+            '                    activity.startActivity(Intent.createChooser(intent, "选择应用打开文档"))',
+            '                }',
+            '            }',
+            '            "OK"',
+            '        } catch (e: Throwable) {',
+            '            "安卓唤起 WPS / Office 失败：${e.message ?: e.javaClass.simpleName}"',
+            '        }',
+            '    }',
+            '',
+            '    private fun resolveMimeType(fileName: String, hint: String): String {',
+            '        val lower = fileName.lowercase()',
+            '        return when {',
+            '            lower.endsWith(".docx") -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"',
+            '            lower.endsWith(".doc") -> "application/msword"',
+            '            lower.endsWith(".xlsx") -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"',
+            '            lower.endsWith(".xls") -> "application/vnd.ms-excel"',
+            '            lower.endsWith(".pptx") -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"',
+            '            lower.endsWith(".ppt") -> "application/vnd.ms-powerpoint"',
+            '            lower.endsWith(".pdf") -> "application/pdf"',
+            '            hint.isNotBlank() && hint != "application/octet-stream" -> hint',
+            '            else -> {',
+            '                val ext = lower.substringAfterLast(".", "")',
+            '                MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"',
+            '            }',
+            '        }',
+            '    }',
+            '}',
+            ''
+        ].join('\n');
+
+        if (curSrc !== nextSrc) {
+            fs.writeFileSync(mainActFile, nextSrc);
+            console.log('==> 已注入 Android WPS/Office 本地打开桥接：' + mainActFile);
+        }
+    }
+}
+
 const appFile = process.env.GRADLE_APP_FILE;
 const rootFile = process.env.GRADLE_ROOT_FILE;
+const mainDir = process.env.ANDROID_MAIN_DIR;
 if (appFile) patchAppGradle(appFile);
 if (rootFile && fs.existsSync(rootFile)) patchRootGradle(rootFile);
+if (mainDir && fs.existsSync(mainDir)) patchAndroidOfficeOpener(mainDir);
 '@
 
 $patchScriptPath = Join-Path $stageDir 'patch-gradle.js'

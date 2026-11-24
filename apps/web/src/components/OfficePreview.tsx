@@ -4,6 +4,14 @@ import type { FileAccessUrls, NodeFileVersion, NodeMeta } from '@yunshu/shared';
 import { api, getApiBase, isTauriRuntime, sha256File, tauriInvoke } from '../lib/api';
 import { useAppStore } from '../store/useAppStore';
 
+declare global {
+  interface Window {
+    YunShuAndroid?: {
+      openLocalFile: (filePath: string, mimeType: string) => string;
+    };
+  }
+}
+
 interface Props {
   node: NodeMeta;
 }
@@ -46,7 +54,7 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
     }
     try {
       setOfficeSyncState(node.id, 'editing_local');
-      await tauriInvoke('open_office_node', {
+      const localPath = await tauriInvoke<string>('open_office_node', {
         nodeId: node.id,
         fileName: fileInfo.fileName,
         downloadUrl: fileInfo.downloadUrl,
@@ -55,7 +63,16 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
         apiBase: getApiBase() || 'http://127.0.0.1:3001',
         authToken: localStorage.getItem('yunshu_token') || '',
       });
-      setMessage('已调用本机 Office 打开文件。修改后按 Ctrl+S 保存，桌面端将自动回传新版本。');
+
+      if (window.YunShuAndroid?.openLocalFile) {
+        const res = window.YunShuAndroid.openLocalFile(localPath, fileInfo.mimeType || '');
+        if (res !== 'OK') {
+          throw new Error(res || '安卓端唤起 WPS / Office 失败');
+        }
+        setMessage('已调用本机 WPS / Office 打开文件。保存后若写回原文件将自动同步回云端。');
+      } else {
+        setMessage('已调用本机 Office 打开文件。修改后按 Ctrl+S 保存，将自动回传新版本。');
+      }
     } catch (err) {
       setOfficeSyncState(node.id, 'error');
       setMessage(err instanceof Error ? err.message : '唤起本机 Office 失败');

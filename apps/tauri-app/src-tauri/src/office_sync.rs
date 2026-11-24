@@ -8,6 +8,7 @@ use std::sync::mpsc::channel;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(not(target_os = "android"))]
 use tauri_plugin_opener::OpenerExt;
 
 static ACTIVE_WATCHERS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -74,7 +75,11 @@ pub async fn open_office_node(
     let node_dir: PathBuf = cache_root.join("office_workspace").join(&node_id);
     fs::create_dir_all(&node_dir).map_err(|e| format!("创建节点缓存目录失败: {}", e))?;
 
-    let local_path = node_dir.join(&file_name);
+    let safe_file_name = file_name
+        .replace('/', "_")
+        .replace('\\', "_")
+        .replace(':', "_");
+    let local_path = node_dir.join(&safe_file_name);
 
     let need_download = match compute_sha256_with_retry(&local_path) {
         Ok(local_hash) => local_hash != sha256,
@@ -84,7 +89,9 @@ pub async fn open_office_node(
     if need_download {
         let resp = reqwest::get(&download_url)
             .await
-            .map_err(|e| format!("下载文件失败: {}", e))?;
+            .map_err(|e| format!("下载文件失败: {}", e))?
+            .error_for_status()
+            .map_err(|e| format!("服务端拒绝下载或链接已过期: {}", e))?;
         let bytes = resp
             .bytes()
             .await
@@ -93,9 +100,15 @@ pub async fn open_office_node(
     }
 
     let path_str = local_path.to_string_lossy().to_string();
-    app.opener()
-        .open_path(&path_str, None::<&str>)
-        .map_err(|e| format!("唤起本机 Office 失败: {}", e))?;
+
+    // 桌面端通过 tauri-plugin-opener 直接唤起本机 Office；
+    // Android 端由前端拿到本地缓存路径后调用原生 FileProvider + Intent 唤起 WPS / Office
+    #[cfg(not(target_os = "android"))]
+    {
+        app.opener()
+            .open_path(&path_str, None::<&str>)
+            .map_err(|e| format!("唤起本机 Office 失败: {}", e))?;
+    }
 
     let _ = app.emit(
         "office:status",
@@ -117,7 +130,7 @@ pub async fn open_office_node(
 
     let watch_dir = node_dir.clone();
     let target_file = local_path.clone();
-    let target_name = file_name.clone();
+    let target_name = safe_file_name.clone();
     let app_clone = app.clone();
     let watched_node_id = node_id.clone();
 
@@ -189,8 +202,15 @@ pub async fn open_office_node(
 
             let upload_result: Result<i32, String> = tauri::async_runtime::block_on(async {
                 let bytes = fs::read(&target_file).map_err(|e| e.to_string())?;
-                let mime = if target_name.to_lowercase().ends_with(".xlsx") {
+                let lower_name = target_name.to_lowercase();
+                let mime = if lower_name.ends_with(".xlsx") {
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                } else if lower_name.ends_with(".xls") {
+                    "application/vnd.ms-excel"
+                } else if lower_name.ends_with(".doc") {
+                    "application/msword"
+                } else if lower_name.ends_with(".pdf") {
+                    "application/pdf"
                 } else {
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 };
@@ -235,7 +255,7 @@ pub async fn open_office_node(
                         "mimeType": mime,
                         "fileSize": bytes.len(),
                         "sha256": new_hash,
-                        "deviceName": "Windows 桌面端"
+                        "deviceName": if cfg!(target_os = "android") { "Android 端" } else { "Windows 桌面端" }
                     }))
                     .send()
                     .await
@@ -253,7 +273,7 @@ pub async fn open_office_node(
                             "mimeType": mime,
                             "fileSize": bytes.len(),
                             "sha256": new_hash,
-                            "deviceName": "Windows 桌面端（冲突副本）",
+                            "deviceName": if cfg!(target_os = "android") { "Android 端（冲突副本）" } else { "Windows 桌面端（冲突副本）" },
                             "forceConflictCopy": true
                         }))
                         .send()
