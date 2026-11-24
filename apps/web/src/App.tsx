@@ -38,10 +38,13 @@ export const App: React.FC = () => {
   const { layoutMode, isSplitLayout, isTouchDevice } = useLayoutMode();
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem('yunshu_sidebar_width') || '268');
-    return Number.isFinite(saved) && saved >= 200 && saved <= 440 ? saved : 268;
+    return Number.isFinite(saved) && saved >= 180 && saved <= 640 ? saved : 268;
   });
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
 
   const resizingRef = useRef(false);
+  const latestSidebarWidthRef = useRef(sidebarWidth);
+  latestSidebarWidthRef.current = sidebarWidth;
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
@@ -74,21 +77,47 @@ export const App: React.FC = () => {
   }, [setSearchOpen, setSidebarOpen, setMobileDrawerOpen, isSplitLayout]);
 
   const handleResizeStart = (e: React.PointerEvent) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
+    e.stopPropagation();
     resizingRef.current = true;
+    setIsResizingSidebar(true);
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+
+    const startX = e.clientX;
+    const startW = latestSidebarWidthRef.current;
+
     const onMove = (ev: PointerEvent) => {
       if (!resizingRef.current) return;
-      const next = Math.min(440, Math.max(200, ev.clientX));
+      if (ev.cancelable) ev.preventDefault();
+      const maxAllowed = Math.min(640, Math.max(360, Math.floor(window.innerWidth * 0.55)));
+      const next = Math.min(maxAllowed, Math.max(180, Math.round(startW + (ev.clientX - startX))));
+      latestSidebarWidthRef.current = next;
       setSidebarWidth(next);
     };
-    const onUp = () => {
+
+    const finishResize = () => {
+      if (!resizingRef.current) return;
       resizingRef.current = false;
-      localStorage.setItem('yunshu_sidebar_width', String(sidebarWidth));
+      setIsResizingSidebar(false);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      localStorage.setItem('yunshu_sidebar_width', String(latestSidebarWidthRef.current));
       window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointerup', finishResize);
+      window.removeEventListener('pointercancel', finishResize);
     };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
+
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', finishResize);
+    window.addEventListener('pointercancel', finishResize);
+  };
+
+  const handleResetSidebarWidth = () => {
+    latestSidebarWidthRef.current = 268;
+    setSidebarWidth(268);
+    localStorage.setItem('yunshu_sidebar_width', '268');
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -201,13 +230,27 @@ export const App: React.FC = () => {
       {/* 主体：PC/平板横屏常驻可调宽分栏 + 平板竖屏/手机侧滑抽屉 + 全宽编辑区 */}
       <div className="flex-1 flex overflow-hidden relative">
         {isSplitLayout && sidebarOpen && (
-          <div className="h-full flex shrink-0" style={{ width: `${sidebarWidth}px` }}>
+          <div className="relative h-full flex shrink-0" style={{ width: `${sidebarWidth}px` }}>
             <SidebarTree touchFriendly={isTouchDevice} />
+            {/* 宽热区（10px）分割拖拽条，视觉纤细、支持鼠标与触控拖动，双击恢复默认宽度 */}
             <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="拖拽调整目录树宽度"
               onPointerDown={handleResizeStart}
-              title="拖拽调整目录宽度"
-              className="w-1 cursor-col-resize hover:bg-blue-500/40 active:bg-blue-500 transition-colors shrink-0"
-            />
+              onDoubleClick={handleResetSidebarWidth}
+              style={{ touchAction: 'none' }}
+              title="左右拖动调整导航宽度（双击恢复默认）"
+              className="group absolute top-0 -right-[5px] bottom-0 w-[10px] z-30 cursor-col-resize flex items-center justify-center"
+            >
+              <div
+                className={`h-full transition-all ${
+                  isResizingSidebar
+                    ? 'w-[3px] bg-blue-500'
+                    : 'w-[2px] bg-transparent group-hover:bg-blue-500/70'
+                }`}
+              />
+            </div>
           </div>
         )}
 
@@ -225,7 +268,7 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        <main className="flex-1 min-w-0 flex overflow-hidden">
+        <main className={`flex-1 min-w-0 flex overflow-hidden ${isResizingSidebar ? 'pointer-events-none select-none' : ''}`}>
           {!activeNode ? (
             <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-slate-400">
               <div className="text-lg font-semibold text-slate-700 dark:text-slate-200 mb-2">
