@@ -592,6 +592,13 @@ if [ -f "$LOGO_FILE" ]; then
     if [ -f "$BG_XML" ] && ! grep -q '<color name="ic_launcher_background">#000000</color>' "$BG_XML"; then
         sed -i 's|<color name="ic_launcher_background">[^<]*</color>|<color name="ic_launcher_background">#000000</color>|g' "$BG_XML"
     fi
+    # 使用带圆角的方形图标（禁用 anydpi-v26 圆形自适应裁剪，并统一 roundIcon 为圆角方形）
+    rm -rf src-tauri/gen/android/app/src/main/res/mipmap-anydpi-v26
+    for d in src-tauri/gen/android/app/src/main/res/mipmap-*; do
+        if [ -f "$d/ic_launcher.png" ]; then
+            cp -f "$d/ic_launcher.png" "$d/ic_launcher_round.png"
+        fi
+    done
 fi
 
 # Gradle 增量与并行：jvmargs 必须写在项目级 gradle.properties 才能覆盖模板值
@@ -850,6 +857,13 @@ function patchAndroidOfficeOpener(mainDir) {
     if (fs.existsSync(manifestFile)) {
         let manifest = fs.readFileSync(manifestFile, 'utf8');
         const originalManifest = manifest;
+
+        if (manifest.indexOf('android:roundIcon="@mipmap/ic_launcher_round"') !== -1) {
+            manifest = manifest.replace(
+                'android:roundIcon="@mipmap/ic_launcher_round"',
+                'android:roundIcon="@mipmap/ic_launcher"'
+            );
+        }
 
         if (manifest.indexOf('yunshu.fileprovider') === -1) {
             const providerXml = [
