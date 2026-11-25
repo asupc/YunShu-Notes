@@ -1,6 +1,7 @@
 import type {
   FileAccessUrls,
   ImportJobState,
+  InlineOfficePreview,
   NodeFileVersion,
   NodeMeta,
   NodeType,
@@ -273,6 +274,9 @@ export const api = {
     request<FileAccessUrls>(
       `/api/v1/nodes/${nodeId}/file-urls${version ? `?version=${version}` : ''}`
     ),
+
+  getInlinePreview: (nodeId: string) =>
+    request<InlineOfficePreview>(`/api/v1/nodes/${nodeId}/inline-preview`),
 
   getVersions: (nodeId: string) =>
     request<{ versions: NodeFileVersion[] }>(`/api/v1/nodes/${nodeId}/versions`),

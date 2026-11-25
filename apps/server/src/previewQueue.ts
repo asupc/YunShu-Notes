@@ -78,7 +78,7 @@ async function processTask(task: PreviewTask): Promise<void> {
           ],
           { timeout: 45_000 }
         );
-        const pdfName = `${path.parse(task.fileName).name}.pdf`;
+        const pdfName = `${path.parse(localIn).name}.pdf`;
         const pdfBuf = await fs.readFile(path.join(workDir, pdfName));
         const previewKey = `previews/${task.fileId}.pdf`;
         await writeStorageFile(previewKey, pdfBuf);

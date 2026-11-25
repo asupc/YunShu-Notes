@@ -69,6 +69,20 @@ export interface NodeFileVersion {
   createdAt: string;
 }
 
+export interface ExcelSheetPreview {
+  name: string;
+  rows: string[][];
+  merges: Array<{ r: number; c: number; rowSpan: number; colSpan: number }>;
+  totalRows: number;
+  totalCols: number;
+  truncated: boolean;
+}
+
+export type InlineOfficePreview =
+  | { kind: 'excel'; fileName: string; sheets: ExcelSheetPreview[] }
+  | { kind: 'docx'; fileName: string; html: string }
+  | { kind: 'unsupported'; fileName: string; reason: string };
+
 export interface FileAccessUrls {
   nodeId: string;
   version: number;

@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import mammoth from 'mammoth';
+import * as XLSX from 'xlsx';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { rankBetween } from '@yunshu/shared';
@@ -9,6 +11,7 @@ import {
   buildSignedDownloadUrl,
   buildSignedUploadUrl,
   readStorageFile,
+  resolveStoragePath,
   verifyStorageToken,
   writeStorageFile,
 } from '../storage';
@@ -351,6 +354,99 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
         createdAt: r.created_at,
       })),
     };
+  });
+
+
+  // 4.5 内置零依赖在线预览：无需安装 LibreOffice，直接解析 Excel (.xlsx/.xls) 多 Sheet 与 Word (.docx)
+  app.get('/api/v1/nodes/:id/inline-preview', async (req, reply) => {
+    const auth = await requireAuth(req, reply);
+    if (!auth) return;
+    const { id } = req.params as { id: string };
+
+    const row = db
+      .prepare(
+        `SELECT nf.file_name, nf.storage_key
+         FROM nodes n
+         INNER JOIN node_files nf ON nf.id = n.current_file_id
+         WHERE n.id = ? AND n.user_id = ?`
+      )
+      .get(id, auth.userId) as { file_name: string; storage_key: string } | undefined;
+
+    if (!row) return reply.code(404).send({ error: '该节点暂无已上传的文件' });
+
+    const localPath = resolveStoragePath(row.storage_key);
+    const lower = row.file_name.toLowerCase();
+
+    try {
+      if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+        const wb = XLSX.readFile(localPath, { cellDates: true });
+        const MAX_ROWS = 500;
+        const MAX_COLS = 50;
+
+        const sheets = wb.SheetNames.map((name) => {
+          const ws = wb.Sheets[name];
+          const ref = ws['!ref'];
+          if (!ref) {
+            return { name, rows: [], merges: [], totalRows: 0, totalCols: 0, truncated: false };
+          }
+          const range = XLSX.utils.decode_range(ref);
+          const totalRows = range.e.r - range.s.r + 1;
+          const totalCols = range.e.c - range.s.c + 1;
+          const rowLimit = Math.min(totalRows, MAX_ROWS);
+          const colLimit = Math.min(totalCols, MAX_COLS);
+          const truncated = totalRows > MAX_ROWS || totalCols > MAX_COLS;
+
+          const rows: string[][] = [];
+          for (let r = 0; r < rowLimit; r += 1) {
+            const line: string[] = [];
+            for (let c = 0; c < colLimit; c += 1) {
+              const addr = XLSX.utils.encode_cell({ r: range.s.r + r, c: range.s.c + c });
+              const cell = ws[addr];
+              if (!cell) {
+                line.push('');
+              } else if (typeof cell.w === 'string') {
+                line.push(cell.w);
+              } else if (cell.v instanceof Date) {
+                line.push(cell.v.toLocaleDateString('zh-CN'));
+              } else if (cell.v !== undefined && cell.v !== null) {
+                line.push(String(cell.v));
+              } else {
+                line.push('');
+              }
+            }
+            rows.push(line);
+          }
+
+          const merges = (ws['!merges'] ?? [])
+            .map((m) => ({
+              r: m.s.r - range.s.r,
+              c: m.s.c - range.s.c,
+              rowSpan: m.e.r - m.s.r + 1,
+              colSpan: m.e.c - m.s.c + 1,
+            }))
+            .filter((m) => m.r >= 0 && m.c >= 0 && m.r < rowLimit && m.c < colLimit);
+
+          return { name, rows, merges, totalRows, totalCols, truncated };
+        });
+
+        return { kind: 'excel', fileName: row.file_name, sheets };
+      }
+
+      if (lower.endsWith('.docx')) {
+        const res = await mammoth.convertToHtml({ path: localPath });
+        return { kind: 'docx', fileName: row.file_name, html: res.value };
+      }
+
+      return {
+        kind: 'unsupported',
+        fileName: row.file_name,
+        reason: '该格式暂不支持内置在线预览，请点击「用本机 Office 打开」查看',
+      };
+    } catch (err) {
+      return reply.code(500).send({
+        error: err instanceof Error ? `解析在线预览失败：${err.message}` : '解析在线预览失败',
+      });
+    }
   });
 
   // 5. 恢复历史版本为最新版
