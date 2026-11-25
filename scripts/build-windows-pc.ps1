@@ -23,7 +23,7 @@
 
 .EXAMPLE
     .\scripts\build-windows-pc.ps1
-    构建 exe，命名为 YunShu-Notes_v<版本>_x64.exe 并发布到 \\192.168.1.71\code
+    构建 exe，命名为 YunShu-Notes.exe 并覆盖发布到 \\192.168.1.71\code
 
 .EXAMPLE
     .\scripts\build-windows-pc.ps1 -ReleaseOut ''
@@ -120,11 +120,11 @@ $exeSizeMb = [Math]::Round((Get-Item -LiteralPath $ExePath).Length / 1MB, 2)
 Write-Step "exe 构建完成：$ExePath（$exeSizeMb MB）"
 
 # ---------------------------------------------------------------------------
-# 归档：exe 复制到 dist（参照 terminal-buddy 的版本化产物命名）
+# 归档：exe 复制到 dist（固定文件名，不携带版本号）
 # ---------------------------------------------------------------------------
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
-$baseName = "YunShu-Notes_v${version}_x64"
+$baseName = 'YunShu-Notes'
 $distExe  = Join-Path $DistDir "$baseName.exe"
 Copy-Item -LiteralPath $ExePath -Destination $distExe -Force
 Write-Step "exe 已复制：$distExe"
@@ -147,7 +147,9 @@ if ($shareAvailable) {
     foreach ($file in $published) {
         $target = Join-Path $ReleaseOut (Split-Path -Leaf $file)
         try {
-            Move-Item -LiteralPath $file -Destination $target -Force
+            # 固定文件名：直接覆盖发布目录中的旧 exe
+            Copy-Item -LiteralPath $file -Destination $target -Force
+            Remove-Item -LiteralPath $file -Force
             $finalPaths += $target
         } catch {
             Write-Warn "移动到 $ReleaseOut 失败：$($_.Exception.Message)，产物保留在本地"

@@ -28,8 +28,8 @@
       - 每次 release 构建自动把 tauri.conf.json / Cargo.toml 的补丁号 +1，
         Tauri 会据此生成递增的 Android versionCode
       - 产物先复制到 apps/tauri-app/dist/android/，命名为
-        YunShu-Notes-v<版本>-<ABI>.apk，并在容器内用 apksigner 校验签名；
-        构建成功后移动到 SMB 共享 \\192.168.1.71\code（可用 -ReleaseOut 修改，
+        YunShu-Notes-<ABI>.apk，并在容器内用 apksigner 校验签名；
+        构建成功后覆盖移动到 SMB 共享 \\192.168.1.71\code（可用 -ReleaseOut 修改，
         共享不可达时自动保留在 dist/android/ 并给出警告）
 
     国内网络默认使用镜像（腾讯云 Android SDK / Gradle、阿里云 Maven、
@@ -1131,15 +1131,17 @@ if ($ReleaseOut) {
 $published = @()
 foreach ($apk in $apks) {
     $outName = if ($apks.Count -eq 1) {
-        "YunShu-Notes-v$buildVersion-$AbiName$nameSuffix.apk"
+        "YunShu-Notes-$AbiName$nameSuffix.apk"
     } else {
-        "YunShu-Notes-v$buildVersion-$AbiName-$($apk.BaseName)$nameSuffix.apk"
+        "YunShu-Notes-$AbiName-$($apk.BaseName)$nameSuffix.apk"
     }
 
     if ($shareAvailable) {
         $target = Join-Path $ReleaseOut $outName
         try {
-            Move-Item -LiteralPath $apk.FullName -Destination $target -Force
+            # 固定文件名：直接覆盖发布目录中的旧 APK
+            Copy-Item -LiteralPath $apk.FullName -Destination $target -Force
+            Remove-Item -LiteralPath $apk.FullName -Force
         } catch {
             Write-Warn "移动到 $ReleaseOut 失败：$($_.Exception.Message)，改为保留在本地"
             $shareAvailable = $false

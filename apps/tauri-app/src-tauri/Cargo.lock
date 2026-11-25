@@ -5432,7 +5432,7 @@ dependencies = [
 
 [[package]]
 name = "yunshu-desktop"
-version = "1.0.9"
+version = "1.0.14"
 dependencies = [
  "hex",
  "notify",
