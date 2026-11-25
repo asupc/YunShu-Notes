@@ -26,6 +26,39 @@
   （通配符证书不覆盖 IP，浏览器会提示证书不受信任，仅建议临时使用）
 - 服务端健康检查：`https://note.678120.cn:8888/api/health` 或 `http://192.168.1.71:8080/api/health`
 
+## ONLYOFFICE 在线编辑（Word / Excel / PPT）
+
+`docker-compose.yml` 中已包含 `onlyoffice` 服务（`onlyoffice/documentserver` 社区版），
+与 `yunshu-server` 同在 `docker_network` 内。浏览器访问地址统一走同源反代：
+
+```text
+https://note.678120.cn:8888/onlyoffice/
+        ↓ nginx（宿主 8888）
+http://127.0.0.1:8088  →  yunshu-onlyoffice 容器
+```
+
+首次启用时在 NAS 的 `.env` 中补齐（`ONLYOFFICE_JWT_SECRET` 用 `openssl rand -hex 32` 生成，
+服务端与 ONLYOFFICE 容器共用，必须一致）：
+
+```bash
+ONLYOFFICE_URL=https://note.678120.cn:8888/onlyoffice
+ONLYOFFICE_JWT_SECRET=<随机 64 位 hex>
+ONLYOFFICE_INTERNAL_API_BASE=http://yunshu-server:3001
+```
+
+注意：
+
+- 服务端保存回调与文件下载都走容器内网 `http://yunshu-server:3001`，只要求 ONLYOFFICE 容器能加入
+  `docker_network`，不依赖公网 NAT 回环。
+- nginx 必须把 `/onlyoffice/` 反代到 `127.0.0.1:8088`，并转发 WebSocket 升级；
+  该 location 内不要加 `X-Frame-Options: SAMEORIGIN`，否则桌面端 / 移动端 WebView 无法内嵌编辑器。
+  完整片段见 [nginx-note.678120.cn.conf](nginx-note.678120.cn.conf)。
+- ONLYOFFICE 镜像较大（约 2GB+），首次部署前可先执行
+  `ssh fnos 'docker pull onlyoffice/documentserver:latest'`，避免部署脚本在重建阶段长时间等待。
+- `scripts/deploy-fnos.sh` 只会回填 `yunshu-server` 服务的 image tag，不会再覆盖 `onlyoffice` 的镜像行。
+- 局域网直连排障入口：`http://192.168.1.71:8088/healthcheck`（返回 `true` 即容器正常）。
+- 未配置 `ONLYOFFICE_URL` 时服务端自动关闭在线编辑入口，仍保留本地预览。
+
 ## 一键部署（推荐）
 
 在开发机仓库根执行（Windows 用 Git Bash；Linux / macOS 直接跑）：

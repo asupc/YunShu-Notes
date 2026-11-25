@@ -27,6 +27,7 @@ declare global {
 }
 
 const loadedOnlyOfficeScripts = new Map<string, Promise<void>>();
+let onlyOfficeInstanceSeq = 0;
 
 function loadOnlyOfficeSdk(documentServerUrl: string): Promise<void> {
   const scriptUrl = `${documentServerUrl.replace(/\/+$/, '')}/web-apps/apps/api/documents/api.js`;
@@ -163,6 +164,14 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
 
   const reuploadRef = useRef<HTMLInputElement>(null);
   const ooEditorRef = useRef<OnlyOfficeEditorInstance | null>(null);
+  // ONLYOFFICE 的挂载点由我们手动创建，不能交给 React 渲染：
+  // 否则 destroyEditor 与 React 卸载都会去删同一个节点，触发 removeChild 报错甚至整页崩溃。
+  const ooContainerRef = useRef<HTMLDivElement | null>(null);
+  // 打开文档时自动进入在线编辑；用户手动退出后，本次打开期间不再强制进入。
+  const autoOpenSkippedRef = useRef(false);
+  const lastNodeIdRef = useRef<string | null>(null);
+  // 防止快速切换文档时，旧请求返回后覆盖新文档的状态/错误地自动打开旧文档。
+  const fetchSeqRef = useRef(0);
 
   const theme = useAppStore((s) => s.theme);
   const syncState = useAppStore((s) => s.officeSyncMap[node.id] ?? 'synced');
@@ -179,9 +188,14 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
       }
       ooEditorRef.current = null;
     }
+    // 清掉 ONLYOFFICE 自己创建的 DOM，保留空的 React 容器
+    if (ooContainerRef.current) {
+      ooContainerRef.current.innerHTML = '';
+    }
   };
 
   const fetchAll = async () => {
+    const seq = ++fetchSeqRef.current;
     setLoading(true);
     setInlinePreview(null);
     setActiveSheetIdx(0);
@@ -191,29 +205,50 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
         api.getVersions(node.id),
         api.getOnlyOfficeConfig(node.id, theme).catch(() => ({ enabled: false }) as OnlyOfficeConfigResponse),
       ]);
+      if (seq !== fetchSeqRef.current) return;
       setFileInfo(urls);
       setVersions(verRes.versions);
       setOnlyOfficeCfg(ooRes);
 
+      // 打开文档即进入在线编辑（不再要求先点「在线编辑」）：
+      // 仅在当前这次打开尚未手动退出、且没有本机 Office 正在编辑时自动进入。
+      const autoEditing =
+        !autoOpenSkippedRef.current &&
+        Boolean(ooRes.enabled && ooRes.documentServerUrl && ooRes.config) &&
+        syncState !== 'editing_local';
+      if (autoEditing) {
+        setHistoryOpen(false);
+        setOnlyOfficeEditing(true);
+      }
+
       const lower = urls.fileName.toLowerCase();
       const isExcel = lower.endsWith('.xlsx') || lower.endsWith('.xls');
       const isDocx = lower.endsWith('.docx');
-      if (isExcel || (isDocx && !(urls.previewPdfUrl && urls.previewStatus === 'ready'))) {
+      // 已自动进入编辑器时不需要再拉取零依赖预览；用户手动退出后会重新拉取。
+      if (!autoEditing && (isExcel || (isDocx && !(urls.previewPdfUrl && urls.previewStatus === 'ready')))) {
         try {
           const inline = await api.getInlinePreview(node.id);
+          if (seq !== fetchSeqRef.current) return;
           setInlinePreview(inline);
         } catch {
-          setInlinePreview(null);
+          if (seq === fetchSeqRef.current) setInlinePreview(null);
         }
       }
     } catch (err) {
-      showTip(err instanceof Error ? err.message : '读取文件信息失败', 'error');
+      if (seq === fetchSeqRef.current) {
+        showTip(err instanceof Error ? err.message : '读取文件信息失败', 'error');
+      }
     } finally {
-      setLoading(false);
+      if (seq === fetchSeqRef.current) setLoading(false);
     }
   };
 
   useEffect(() => {
+    // 切换到另一个节点时重新允许自动进入编辑；同节点版本刷新则沿用当前用户选择。
+    if (lastNodeIdRef.current !== node.id) {
+      lastNodeIdRef.current = node.id;
+      autoOpenSkippedRef.current = false;
+    }
     destroyOnlyOffice();
     setOnlyOfficeEditing(false);
     void fetchAll();
@@ -233,9 +268,14 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
         await loadOnlyOfficeSdk(onlyOfficeCfg.documentServerUrl!);
         if (cancelled) return;
         destroyOnlyOffice();
-        const holder = document.getElementById('yunshu-onlyoffice-editor');
-        if (!holder || !window.DocsAPI?.DocEditor) return;
-        ooEditorRef.current = new window.DocsAPI.DocEditor('yunshu-onlyoffice-editor', onlyOfficeCfg.config!);
+        const container = ooContainerRef.current;
+        if (!container || !window.DocsAPI?.DocEditor) return;
+        // 在 React 容器里再放一个完全由 ONLYOFFICE 接管的子节点
+        const holder = document.createElement('div');
+        holder.id = `yunshu-onlyoffice-editor-${++onlyOfficeInstanceSeq}`;
+        holder.className = 'w-full h-full';
+        container.appendChild(holder);
+        ooEditorRef.current = new window.DocsAPI.DocEditor(holder.id, onlyOfficeCfg.config!);
       } catch (err) {
         if (!cancelled) {
           showTip(err instanceof Error ? err.message : '加载 ONLYOFFICE 编辑器失败', 'error');
@@ -254,6 +294,8 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
 
   const handleToggleOnlyOffice = async () => {
     if (onlyOfficeEditing) {
+      // 用户主动退出后，本次打开停留在预览，不再自动弹回编辑器。
+      autoOpenSkippedRef.current = true;
       destroyOnlyOffice();
       setOnlyOfficeEditing(false);
       // 退出后稍等回调落盘并刷新最新版本与预览
@@ -495,16 +537,22 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
 
       {/* 主体：ONLYOFFICE 在线编辑器 或 预览画布 + 右侧版本历史抽屉 */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        {onlyOfficeEditing ? (
-          <div className="relative flex-1 min-w-0 h-full bg-white dark:bg-black">
-            {onlyOfficeLoading && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 dark:bg-black/80 text-xs text-slate-500">
-                正在加载 ONLYOFFICE 在线编辑器...
-              </div>
-            )}
-            <div id="yunshu-onlyoffice-editor" className="w-full h-full" />
-          </div>
-        ) : (
+        {/* 编辑器容器始终挂载，退出编辑时只销毁内部实例并隐藏：
+            避免 React 卸载与 ONLYOFFICE 自己清理 DOM 相互抢节点。 */}
+        <div
+          className={`relative flex-1 min-w-0 h-full bg-white dark:bg-black ${
+            onlyOfficeEditing ? '' : 'hidden'
+          }`}
+        >
+          {onlyOfficeLoading && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 dark:bg-black/80 text-xs text-slate-500">
+              正在加载 ONLYOFFICE 在线编辑器...
+            </div>
+          )}
+          <div ref={ooContainerRef} className="w-full h-full" />
+        </div>
+
+        {!onlyOfficeEditing && (
           <div className="flex-1 min-w-0 bg-slate-100 dark:bg-black flex flex-col overflow-hidden">
             {loading ? (
               <div className="flex-1 flex items-center justify-center text-sm text-slate-500">
@@ -552,7 +600,7 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
                       : '暂未生成在线预览'}
                   </p>
                   <p className="text-xs text-slate-500 mb-5">
-                    你可以直接点击「在线编辑」或「用本机 Office 打开」查看和编辑，保存后自动回传。
+                    你可以下载原文件，或在桌面端点击「用本机 Office 打开」查看和编辑，保存后自动回传。
                   </p>
                   {fileInfo && (
                     <a

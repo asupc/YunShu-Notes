@@ -76,6 +76,23 @@ function requestBase(req: FastifyRequest): string {
   return host ? `${proto}://${host}` : config.publicApiBase;
 }
 
+// 保存回调中的文件地址由 ONLYOFFICE 生成，可能带公网 Host（如 note.678120.cn:8888/onlyoffice/cache/...）。
+// 服务端容器内统一改走 ONLYOFFICE 容器内网地址，避免 NAT 回环失败，或被前端 SPA 的 index.html 兜底成 200。
+function resolveCallbackFileUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    const pathname = url.pathname.startsWith('/onlyoffice/')
+      ? url.pathname.slice('/onlyoffice'.length)
+      : url.pathname;
+    if (config.onlyofficeInternalUrl && pathname.startsWith('/cache/')) {
+      return `${config.onlyofficeInternalUrl}${pathname}${url.search}`;
+    }
+  } catch {
+    // 非绝对 URL 或解析失败时保持原样
+  }
+  return raw;
+}
+
 function resolveOnlyOfficeDocType(fileName: string): { fileType: string; documentType: 'word' | 'cell' | 'slide' } | null {
   const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
   if (['docx', 'doc', 'odt', 'rtf', 'txt'].includes(ext)) {
@@ -237,9 +254,16 @@ export async function registerOnlyOfficeRoutes(app: FastifyInstance): Promise<vo
     // status 2 = 文档关闭并准备保存；status 6 = Ctrl+S 强制保存
     if ((status === 2 || status === 6) && fileUrl) {
       try {
-        const res = await fetch(fileUrl);
+        const fetchUrl = resolveCallbackFileUrl(fileUrl);
+        const res = await fetch(fetchUrl);
         if (!res.ok) {
-          app.log.error(`[ONLYOFFICE] 下载保存文件失败 HTTP ${res.status}: ${fileUrl}`);
+          app.log.error(`[ONLYOFFICE] 下载保存文件失败 HTTP ${res.status}: ${fetchUrl}`);
+          return reply.code(200).send({ error: 1 });
+        }
+        // 防御：若保存地址被前端 SPA 兜底成 index.html，绝不能把 HTML 当成文档新版本写入
+        const contentType = res.headers.get('content-type') ?? '';
+        if (contentType.toLowerCase().includes('text/html')) {
+          app.log.error(`[ONLYOFFICE] 保存地址返回 HTML（疑似被 SPA 兜底），已拒绝: ${fetchUrl}`);
           return reply.code(200).send({ error: 1 });
         }
         const buf = Buffer.from(await res.arrayBuffer());

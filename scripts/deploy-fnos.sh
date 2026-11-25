@@ -113,8 +113,15 @@ deploy_via_compose() {
   rsh bash -s -- "$REMOTE_COMPOSE_FILE" "$APP" "$img" <<'EOF'
 set -eu
 compose=$1 app=$2 img=$3
-sed -i -E "s|^([[:space:]]*)image:.*|\1image: \"$img\"|" "$compose"
-grep -q "image: \"$img\"" "$compose" || { echo "!! compose image 行回填失败，请检查 $compose" >&2; exit 1; }
+# 只回填 yunshu-server 服务的 image 行：compose 里还有 onlyoffice 等其它服务，
+# 不能像单服务时代那样把全部 image: 行都替换成 yunshu-server 镜像。
+awk -v img="$img" '
+  { sub(/\r$/, "") }
+  /^  [A-Za-z0-9_.-]+:[[:space:]]*$/ { svc=$1; sub(/:$/, "", svc) }
+  svc=="yunshu-server" && /^[[:space:]]*image:/ { sub(/image:.*/, "image: \"" img "\"") }
+  { print }
+' "$compose" > "$compose.tmp" && mv "$compose.tmp" "$compose"
+grep -q "^[[:space:]]*image: \"$img\"" "$compose" || { echo "!! compose image 行回填失败，请检查 $compose" >&2; exit 1; }
 docker compose -f "$compose" up -d
 running=$(docker inspect "$app" --format '{{.Config.Image}}')
 [ "$running" = "$img" ] || { echo "!! 容器实际镜像 $running 与预期 $img 不一致" >&2; exit 1; }
@@ -297,6 +304,9 @@ build_web() {
     npm install --no-audit --no-fund
   fi
   rm -rf "$out"
+  # 前端通过 workspace 引用 @yunshu/shared 的 dist 类型/产物，必须先重建，
+  # 否则新增的导出会报 TS2305（服务端镜像内部会自行 build:shared，这里补上宿主侧）。
+  npm run build:shared
   npm run build --workspace=@yunshu/web -- --outDir "../../.runtime-data/web-build-$tag" --emptyOutDir
   [ -f "$out/index.html" ] || die "前端构建产物缺 $out/index.html"
   WEB_INDEX_SHA=$(sha256sum "$out/index.html" | cut -d' ' -f1)
@@ -368,6 +378,7 @@ dir=$1 env=$2 data=$3 webroot=$4 nginx=$5 net=$6 app=$7
 [ -d "$dir" ] || { echo "!! 远端缺部署目录 $dir" >&2; exit 1; }
 [ -d "$data" ] || { echo "!! 远端缺数据目录 $data" >&2; exit 1; }
 grep -q '^JWT_SECRET=..*' "$env" 2>/dev/null || { echo "!! $env 缺 JWT_SECRET（先放好 .env 再部署）" >&2; exit 1; }
+grep -q '^ONLYOFFICE_JWT_SECRET=..*' "$env" 2>/dev/null || { echo "!! $env 缺 ONLYOFFICE_JWT_SECRET（compose 已包含 onlyoffice 服务）" >&2; exit 1; }
 [ -d "$webroot" ] || { echo "!! 远端缺前端目录 $webroot" >&2; exit 1; }
 [ "$(docker inspect -f '{{.State.Running}}' "$nginx" 2>/dev/null || echo false)" = "true" ] \
   || { echo "!! 远端 nginx 容器 $nginx 未运行" >&2; exit 1; }

@@ -17,6 +17,56 @@ function formatSyncTime(iso: string | null): string {
   return d.toLocaleTimeString('zh-CN', { hour12: false });
 }
 
+// 文档预览/编辑器出错时只降级主内容区，避免整个应用白屏。
+type EditorErrorBoundaryProps = { children: React.ReactNode; resetKey?: string };
+
+class EditorErrorBoundary extends React.Component<
+  EditorErrorBoundaryProps,
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidUpdate(prevProps: EditorErrorBoundaryProps) {
+    // 切换到另一篇文档时自动恢复，不必整页刷新
+    if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('[Editor] 渲染失败', error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex-1 flex items-center justify-center p-6">
+          <div className="max-w-md text-center p-8 bg-white dark:bg-black rounded-xl border border-slate-200 dark:border-neutral-800 shadow-sm">
+            <p className="text-base font-semibold text-slate-800 dark:text-slate-100 mb-2">
+              内容加载异常
+            </p>
+            <p className="text-xs text-slate-500 mb-5">
+              请重新加载；若问题持续，可切换到其他文档后再返回。
+            </p>
+            <button
+              type="button"
+              onClick={() => this.setState({ hasError: false })}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700"
+            >
+              重新加载
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export const App: React.FC = () => {
   const user = useAppStore((s) => s.user);
   const authChecked = useAppStore((s) => s.authChecked);
@@ -310,24 +360,26 @@ export const App: React.FC = () => {
         )}
 
         <main className={`flex-1 min-w-0 flex overflow-hidden ${isResizingSidebar ? 'pointer-events-none select-none' : ''}`}>
-          {!activeNode ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-slate-400">
-              <div className="text-lg font-semibold text-slate-700 dark:text-slate-200 mb-2">
-                欢迎回到云树笔记
+          <EditorErrorBoundary resetKey={activeNode?.id ?? ''}>
+            {!activeNode ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-slate-400">
+                <div className="text-lg font-semibold text-slate-700 dark:text-slate-200 mb-2">
+                  欢迎回到云树笔记
+                </div>
+                <p className="text-xs max-w-md leading-relaxed">
+                  {isSplitLayout
+                    ? '在左侧无限层级目录树中选择任意笔记、Markdown 或 Word/Excel 文档，或按 Ctrl+K 全局搜索。'
+                    : '点击左上角菜单按钮或从屏幕左边缘向右滑动打开目录树。'}
+                </p>
               </div>
-              <p className="text-xs max-w-md leading-relaxed">
-                {isSplitLayout
-                  ? '在左侧无限层级目录树中选择任意笔记、Markdown 或 Word/Excel 文档，或按 Ctrl+K 全局搜索。'
-                  : '点击左上角菜单按钮或从屏幕左边缘向右滑动打开目录树。'}
-              </p>
-            </div>
-          ) : activeNode.nodeType === 'folder' ? (
-            <FolderGridView folder={activeNode} />
-          ) : isOfficeFile ? (
-            <OfficePreview node={activeNode} />
-          ) : (
-            <NoteEditor node={activeNode} />
-          )}
+            ) : activeNode.nodeType === 'folder' ? (
+              <FolderGridView folder={activeNode} />
+            ) : isOfficeFile ? (
+              <OfficePreview node={activeNode} />
+            ) : (
+              <NoteEditor node={activeNode} />
+            )}
+          </EditorErrorBoundary>
         </main>
       </div>
 

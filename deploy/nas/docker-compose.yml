@@ -18,6 +18,8 @@ services:
       ONLYOFFICE_URL: ${ONLYOFFICE_URL:-}
       ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-yunshu-onlyoffice-secret-change-me}
       ONLYOFFICE_INTERNAL_API_BASE: ${ONLYOFFICE_INTERNAL_API_BASE:-http://yunshu-server:3001}
+      # 保存回调里的 /cache/files 从 ONLYOFFICE 容器内网取，避免公网 NAT 回环
+      ONLYOFFICE_INTERNAL_URL: ${ONLYOFFICE_INTERNAL_URL:-http://yunshu-onlyoffice}
       TZ: Asia/Shanghai
     ports:
       # 只监听回环，由宿主 nginx（host 网络）反代
@@ -38,18 +40,23 @@ services:
       retries: 3
       start_period: 30s
 
+  # ONLYOFFICE Docs 社区版：Web 端经 nginx 同源反代到 /onlyoffice/，
+  # 服务端容器通过 docker_network 访问 yunshu-server:3001 完成取文件与保存回调。
   onlyoffice:
     image: onlyoffice/documentserver:latest
     container_name: yunshu-onlyoffice
     restart: unless-stopped
     environment:
       JWT_ENABLED: "true"
-      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-yunshu-onlyoffice-secret-change-me}
+      # 必须与服务端 ONLYOFFICE_JWT_SECRET 完全一致（两者都取 .env 同一变量）
+      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:?ONLYOFFICE_JWT_SECRET is required}
       JWT_HEADER: Authorization
+      # 允许访问内网 yunshu-server:3001 拉取/回调；文件地址用云树自己的签名，无需 DS JWT
       ALLOW_PRIVATE_IP_ADDRESS: "true"
       USE_UNAUTHORIZED_STORAGE: "true"
       TZ: Asia/Shanghai
     ports:
+      # 仅用于本机 nginx 反代与局域网排障；外网统一走 https://note.678120.cn:8888/onlyoffice/
       - "8088:80"
     volumes:
       - ./onlyoffice/data:/var/www/onlyoffice/Data
