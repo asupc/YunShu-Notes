@@ -12,8 +12,28 @@ services:
       DATA_DIR: /data
       SQLITE_PATH: /data/yunshu.db
       JWT_SECRET: ${JWT_SECRET:-please-change-jwt-secret-in-production}
+      ONLYOFFICE_URL: ${ONLYOFFICE_URL:-http://localhost:8088}
+      ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-yunshu-onlyoffice-secret-change-me}
+      ONLYOFFICE_INTERNAL_API_BASE: ${ONLYOFFICE_INTERNAL_API_BASE:-http://yunshu-server:3001}
     ports:
       - "3001:3001"
       - "3002:3002"
     volumes:
       - ./data:/data
+
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    container_name: yunshu-onlyoffice
+    restart: unless-stopped
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-yunshu-onlyoffice-secret-change-me}
+      JWT_HEADER: Authorization
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+      USE_UNAUTHORIZED_STORAGE: "true"
+      TZ: Asia/Shanghai
+    ports:
+      - "8088:80"
+    volumes:
+      - ./onlyoffice/data:/var/www/onlyoffice/Data
+      - ./onlyoffice/logs:/var/log/onlyoffice

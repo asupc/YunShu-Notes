@@ -1,21 +1,55 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Clock, Download, ExternalLink, RefreshCw, RotateCcw, Upload } from 'lucide-react';
+import { Clock, Download, Edit3, ExternalLink, RefreshCw, RotateCcw, Upload, X } from 'lucide-react';
 import type {
   ExcelSheetPreview,
   FileAccessUrls,
   InlineOfficePreview,
   NodeFileVersion,
   NodeMeta,
+  OnlyOfficeConfigResponse,
 } from '@yunshu/shared';
 import { api, getApiBase, isTauriRuntime, sha256File, tauriInvoke } from '../lib/api';
 import { useAppStore } from '../store/useAppStore';
+
+interface OnlyOfficeEditorInstance {
+  destroyEditor?: () => void;
+}
 
 declare global {
   interface Window {
     YunShuAndroid?: {
       openLocalFile: (filePath: string, mimeType: string) => string;
     };
+    DocsAPI?: {
+      DocEditor: new (placeholderId: string, config: Record<string, unknown>) => OnlyOfficeEditorInstance;
+    };
   }
+}
+
+const loadedOnlyOfficeScripts = new Map<string, Promise<void>>();
+
+function loadOnlyOfficeSdk(documentServerUrl: string): Promise<void> {
+  const scriptUrl = `${documentServerUrl.replace(/\/+$/, '')}/web-apps/apps/api/documents/api.js`;
+  if (window.DocsAPI?.DocEditor) return Promise.resolve();
+  const existing = loadedOnlyOfficeScripts.get(scriptUrl);
+  if (existing) return existing;
+
+  const p = new Promise<void>((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = scriptUrl;
+    script.async = true;
+    script.onload = () => {
+      if (window.DocsAPI?.DocEditor) resolve();
+      else reject(new Error('ONLYOFFICE SDK 已加载但未初始化 DocsAPI'));
+    };
+    script.onerror = () => {
+      loadedOnlyOfficeScripts.delete(scriptUrl);
+      reject(new Error(`无法连接 ONLYOFFICE 服务（${documentServerUrl}），请检查容器是否已启动`));
+    };
+    document.head.appendChild(script);
+  });
+  loadedOnlyOfficeScripts.set(scriptUrl, p);
+  return p;
 }
 
 interface Props {
@@ -64,7 +98,7 @@ const ExcelSheetTable: React.FC<{ sheet: ExcelSheetPreview }> = ({ sheet }) => {
       {sheet.truncated && (
         <div className="px-4 py-1.5 text-[11px] bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-b border-amber-200 dark:border-amber-900">
           该工作表共 {sheet.totalRows} 行 × {sheet.totalCols} 列，在线预览仅展示前 {sheet.rows.length} 行 ×{' '}
-          {colCount} 列；完整内容请点击「用本机 Office 打开」查看。
+          {colCount} 列；完整内容请点击「在线编辑」或「用本机 Office 打开」查看。
         </div>
       )}
       <table className="border-collapse text-xs w-max min-w-full">
@@ -119,30 +153,51 @@ const ExcelSheetTable: React.FC<{ sheet: ExcelSheetPreview }> = ({ sheet }) => {
 export const OfficePreview: React.FC<Props> = ({ node }) => {
   const [fileInfo, setFileInfo] = useState<FileAccessUrls | null>(null);
   const [inlinePreview, setInlinePreview] = useState<InlineOfficePreview | null>(null);
+  const [onlyOfficeCfg, setOnlyOfficeCfg] = useState<OnlyOfficeConfigResponse | null>(null);
+  const [onlyOfficeEditing, setOnlyOfficeEditing] = useState(false);
+  const [onlyOfficeLoading, setOnlyOfficeLoading] = useState(false);
   const [activeSheetIdx, setActiveSheetIdx] = useState(0);
   const [versions, setVersions] = useState<NodeFileVersion[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const reuploadRef = useRef<HTMLInputElement>(null);
 
+  const reuploadRef = useRef<HTMLInputElement>(null);
+  const ooEditorRef = useRef<OnlyOfficeEditorInstance | null>(null);
+
+  const theme = useAppStore((s) => s.theme);
   const syncState = useAppStore((s) => s.officeSyncMap[node.id] ?? 'synced');
   const setOfficeSyncState = useAppStore((s) => s.setOfficeSyncState);
   const loadTree = useAppStore((s) => s.loadTree);
   const showTip = useAppStore((s) => s.showTip);
+
+  const destroyOnlyOffice = () => {
+    if (ooEditorRef.current) {
+      try {
+        ooEditorRef.current.destroyEditor?.();
+      } catch {
+        /* ignore */
+      }
+      ooEditorRef.current = null;
+    }
+  };
 
   const fetchAll = async () => {
     setLoading(true);
     setInlinePreview(null);
     setActiveSheetIdx(0);
     try {
-      const [urls, verRes] = await Promise.all([api.getFileUrls(node.id), api.getVersions(node.id)]);
+      const [urls, verRes, ooRes] = await Promise.all([
+        api.getFileUrls(node.id),
+        api.getVersions(node.id),
+        api.getOnlyOfficeConfig(node.id, theme).catch(() => ({ enabled: false }) as OnlyOfficeConfigResponse),
+      ]);
       setFileInfo(urls);
       setVersions(verRes.versions);
+      setOnlyOfficeCfg(ooRes);
 
       const lower = urls.fileName.toLowerCase();
       const isExcel = lower.endsWith('.xlsx') || lower.endsWith('.xls');
       const isDocx = lower.endsWith('.docx');
-      // Excel 优先使用原生多 Sheet 交互表格预览；Word 在无 PDF 预览时回退到内置 HTML 预览
       if (isExcel || (isDocx && !(urls.previewPdfUrl && urls.previewStatus === 'ready'))) {
         try {
           const inline = await api.getInlinePreview(node.id);
@@ -159,8 +214,68 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
   };
 
   useEffect(() => {
+    destroyOnlyOffice();
+    setOnlyOfficeEditing(false);
     void fetchAll();
+    return () => destroyOnlyOffice();
   }, [node.id, node.currentVersion]);
+
+  // 挂载 ONLYOFFICE 编辑器实例
+  useEffect(() => {
+    if (!onlyOfficeEditing || !onlyOfficeCfg?.enabled || !onlyOfficeCfg.documentServerUrl || !onlyOfficeCfg.config) {
+      return;
+    }
+    let cancelled = false;
+    setOnlyOfficeLoading(true);
+
+    void (async () => {
+      try {
+        await loadOnlyOfficeSdk(onlyOfficeCfg.documentServerUrl!);
+        if (cancelled) return;
+        destroyOnlyOffice();
+        const holder = document.getElementById('yunshu-onlyoffice-editor');
+        if (!holder || !window.DocsAPI?.DocEditor) return;
+        ooEditorRef.current = new window.DocsAPI.DocEditor('yunshu-onlyoffice-editor', onlyOfficeCfg.config!);
+      } catch (err) {
+        if (!cancelled) {
+          showTip(err instanceof Error ? err.message : '加载 ONLYOFFICE 编辑器失败', 'error');
+          setOnlyOfficeEditing(false);
+        }
+      } finally {
+        if (!cancelled) setOnlyOfficeLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      destroyOnlyOffice();
+    };
+  }, [onlyOfficeEditing, onlyOfficeCfg, showTip]);
+
+  const handleToggleOnlyOffice = async () => {
+    if (onlyOfficeEditing) {
+      destroyOnlyOffice();
+      setOnlyOfficeEditing(false);
+      // 退出后稍等回调落盘并刷新最新版本与预览
+      window.setTimeout(() => {
+        void loadTree();
+        void fetchAll();
+      }, 600);
+      return;
+    }
+    try {
+      const latestCfg = await api.getOnlyOfficeConfig(node.id, theme);
+      if (!latestCfg.enabled || !latestCfg.documentServerUrl || !latestCfg.config) {
+        showTip(latestCfg.reason || '服务端尚未配置 ONLYOFFICE_URL', 'error');
+        return;
+      }
+      setOnlyOfficeCfg(latestCfg);
+      setHistoryOpen(false);
+      setOnlyOfficeEditing(true);
+    } catch (err) {
+      showTip(err instanceof Error ? err.message : '获取 ONLYOFFICE 配置失败', 'error');
+    }
+  };
 
   const handleOpenLocalOffice = async () => {
     if (!fileInfo) return;
@@ -270,7 +385,7 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
       <input ref={reuploadRef} type="file" onChange={handleUploadNewVersion} className="hidden" />
 
       {/* 本机编辑中提示条 */}
-      {syncState === 'editing_local' && (
+      {syncState === 'editing_local' && !onlyOfficeEditing && (
         <div className="px-4 py-1.5 text-xs bg-amber-50 dark:bg-amber-950/60 border-b border-amber-200 dark:border-amber-900 text-amber-800 dark:text-amber-300 flex items-center justify-center">
           检测到文件已在外部 Office 打开，修改后按 Ctrl+S 保存将自动同步回云端
         </div>
@@ -287,7 +402,9 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
           )}
           <span
             className={`px-2 py-0.5 text-xs rounded-full font-medium ${
-              syncState === 'synced'
+              onlyOfficeEditing
+                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                : syncState === 'synced'
                 ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
                 : syncState === 'editing_local'
                 ? 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
@@ -296,7 +413,9 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
                 : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'
             }`}
           >
-            {syncState === 'synced'
+            {onlyOfficeEditing
+              ? '● ONLYOFFICE 在线编辑中'
+              : syncState === 'synced'
               ? '● 已同步'
               : syncState === 'editing_local'
               ? '● 本机编辑中'
@@ -307,113 +426,152 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleOpenLocalOffice}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md bg-blue-600 hover:bg-blue-700 text-white"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            {isTauriRuntime() ? '用本机 Office 打开' : '下载并用本机打开'}
-          </button>
+          {onlyOfficeCfg?.enabled && (
+            <button
+              type="button"
+              onClick={() => void handleToggleOnlyOffice()}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md text-white ${
+                onlyOfficeEditing
+                  ? 'bg-slate-700 hover:bg-slate-800 dark:bg-neutral-800 dark:hover:bg-neutral-700'
+                  : 'bg-emerald-600 hover:bg-emerald-700'
+              }`}
+              title={onlyOfficeEditing ? '退出在线编辑并刷新最新版本' : '使用 ONLYOFFICE Docs 在线编辑（Ctrl+S 自动保存新版本）'}
+            >
+              {onlyOfficeEditing ? (
+                <>
+                  <X className="w-3.5 h-3.5" />
+                  退出在线编辑
+                </>
+              ) : (
+                <>
+                  <Edit3 className="w-3.5 h-3.5" />
+                  在线编辑
+                </>
+              )}
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => reuploadRef.current?.click()}
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-900"
-          >
-            <Upload className="w-3.5 h-3.5" />
-            上传新版
-          </button>
+          {!onlyOfficeEditing && (
+            <>
+              <button
+                type="button"
+                onClick={handleOpenLocalOffice}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                {isTauriRuntime() ? '用本机 Office 打开' : '下载并用本机打开'}
+              </button>
 
-          <button
-            type="button"
-            onClick={() => setHistoryOpen((v) => !v)}
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-900"
-          >
-            <Clock className="w-3.5 h-3.5" />
-            版本历史（{versions.length}）
-          </button>
+              <button
+                type="button"
+                onClick={() => reuploadRef.current?.click()}
+                className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-900"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                上传新版
+              </button>
 
-          <button
-            type="button"
-            onClick={() => void fetchAll()}
-            className="p-1.5 rounded-md border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-900"
-            title="刷新预览"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-          </button>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen((v) => !v)}
+                className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-900"
+              >
+                <Clock className="w-3.5 h-3.5" />
+                版本历史（{versions.length}）
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void fetchAll()}
+                className="p-1.5 rounded-md border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-900"
+                title="刷新预览"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      {/* 主体：预览画布 + 右侧版本历史抽屉 */}
+      {/* 主体：ONLYOFFICE 在线编辑器 或 预览画布 + 右侧版本历史抽屉 */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        <div className="flex-1 min-w-0 bg-slate-100 dark:bg-black flex flex-col overflow-hidden">
-          {loading ? (
-            <div className="flex-1 flex items-center justify-center text-sm text-slate-500">
-              正在加载文档预览...
-            </div>
-          ) : inlinePreview?.kind === 'excel' && currentExcelSheet ? (
-            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-              <ExcelSheetTable sheet={currentExcelSheet} />
-              {/* 底部多 Sheet 切换标签栏 */}
-              <div className="px-3 py-1.5 border-t border-slate-200 dark:border-neutral-800 bg-slate-50 dark:bg-neutral-950 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
-                {inlinePreview.sheets.map((s, idx) => (
-                  <button
-                    key={`${s.name}-${idx}`}
-                    type="button"
-                    onClick={() => setActiveSheetIdx(idx)}
-                    className={`px-3 py-1 rounded text-xs font-medium whitespace-nowrap transition-colors ${
-                      idx === activeSheetIdx
-                        ? 'bg-white dark:bg-black text-emerald-700 dark:text-emerald-400 border border-slate-200 dark:border-neutral-700 shadow-sm'
-                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200/70 dark:hover:bg-neutral-900'
-                    }`}
-                  >
-                    {s.name}
-                  </button>
-                ))}
+        {onlyOfficeEditing ? (
+          <div className="relative flex-1 min-w-0 h-full bg-white dark:bg-black">
+            {onlyOfficeLoading && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 dark:bg-black/80 text-xs text-slate-500">
+                正在加载 ONLYOFFICE 在线编辑器...
               </div>
-            </div>
-          ) : inlinePreview?.kind === 'docx' ? (
-            <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-slate-50 dark:bg-black">
-              <div
-                className="ProseMirror max-w-4xl mx-auto p-6 sm:p-10 rounded-xl bg-white dark:bg-neutral-950 border border-slate-200 dark:border-neutral-800 shadow-sm text-slate-800 dark:text-slate-200"
-                dangerouslySetInnerHTML={{ __html: inlinePreview.html }}
+            )}
+            <div id="yunshu-onlyoffice-editor" className="w-full h-full" />
+          </div>
+        ) : (
+          <div className="flex-1 min-w-0 bg-slate-100 dark:bg-black flex flex-col overflow-hidden">
+            {loading ? (
+              <div className="flex-1 flex items-center justify-center text-sm text-slate-500">
+                正在加载文档预览...
+              </div>
+            ) : inlinePreview?.kind === 'excel' && currentExcelSheet ? (
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                <ExcelSheetTable sheet={currentExcelSheet} />
+                <div className="px-3 py-1.5 border-t border-slate-200 dark:border-neutral-800 bg-slate-50 dark:bg-neutral-950 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
+                  {inlinePreview.sheets.map((s, idx) => (
+                    <button
+                      key={`${s.name}-${idx}`}
+                      type="button"
+                      onClick={() => setActiveSheetIdx(idx)}
+                      className={`px-3 py-1 rounded text-xs font-medium whitespace-nowrap transition-colors ${
+                        idx === activeSheetIdx
+                          ? 'bg-white dark:bg-black text-emerald-700 dark:text-emerald-400 border border-slate-200 dark:border-neutral-700 shadow-sm'
+                          : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200/70 dark:hover:bg-neutral-900'
+                      }`}
+                    >
+                      {s.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : inlinePreview?.kind === 'docx' ? (
+              <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-slate-50 dark:bg-black">
+                <div
+                  className="ProseMirror max-w-4xl mx-auto p-6 sm:p-10 rounded-xl bg-white dark:bg-neutral-950 border border-slate-200 dark:border-neutral-800 shadow-sm text-slate-800 dark:text-slate-200"
+                  dangerouslySetInnerHTML={{ __html: inlinePreview.html }}
+                />
+              </div>
+            ) : fileInfo?.previewPdfUrl && fileInfo.previewStatus === 'ready' ? (
+              <iframe
+                src={fileInfo.previewPdfUrl}
+                title={fileInfo.fileName}
+                className="w-full h-full border-0"
               />
-            </div>
-          ) : fileInfo?.previewPdfUrl && fileInfo.previewStatus === 'ready' ? (
-            <iframe
-              src={fileInfo.previewPdfUrl}
-              title={fileInfo.fileName}
-              className="w-full h-full border-0"
-            />
-          ) : (
-            <div className="flex-1 flex items-center justify-center p-4">
-              <div className="max-w-md text-center p-8 bg-white dark:bg-black rounded-xl border border-slate-200 dark:border-neutral-800 shadow-sm">
-                <p className="text-base font-semibold text-slate-800 dark:text-slate-100 mb-2">
-                  {fileInfo?.previewStatus === 'pending'
-                    ? '后台正在生成高清 PDF 预览...'
-                    : '暂未生成在线预览'}
-                </p>
-                <p className="text-xs text-slate-500 mb-5">
-                  你可以直接点击「用本机 Office 打开」在电脑或安卓端使用 Microsoft Word / Excel / WPS 查看和编辑，保存后自动回传。
-                </p>
-                {fileInfo && (
-                  <a
-                    href={fileInfo.downloadUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    下载原文件（{(fileInfo.fileSize / 1024).toFixed(1)} KB）
-                  </a>
-                )}
+            ) : (
+              <div className="flex-1 flex items-center justify-center p-4">
+                <div className="max-w-md text-center p-8 bg-white dark:bg-black rounded-xl border border-slate-200 dark:border-neutral-800 shadow-sm">
+                  <p className="text-base font-semibold text-slate-800 dark:text-slate-100 mb-2">
+                    {fileInfo?.previewStatus === 'pending'
+                      ? '后台正在生成高清 PDF 预览...'
+                      : '暂未生成在线预览'}
+                  </p>
+                  <p className="text-xs text-slate-500 mb-5">
+                    你可以直接点击「在线编辑」或「用本机 Office 打开」查看和编辑，保存后自动回传。
+                  </p>
+                  {fileInfo && (
+                    <a
+                      href={fileInfo.downloadUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      下载原文件（{(fileInfo.fileSize / 1024).toFixed(1)} KB）
+                    </a>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
-        {historyOpen && (
+        {historyOpen && !onlyOfficeEditing && (
           <div className="w-[290px] shrink-0 border-l border-slate-200 dark:border-neutral-800 bg-white dark:bg-black overflow-y-auto p-4">
             <h3 className="text-sm font-bold mb-3 text-slate-900 dark:text-slate-100">版本历史</h3>
             <div className="space-y-3">

@@ -83,6 +83,13 @@ export type InlineOfficePreview =
   | { kind: 'docx'; fileName: string; html: string }
   | { kind: 'unsupported'; fileName: string; reason: string };
 
+export interface OnlyOfficeConfigResponse {
+  enabled: boolean;
+  reason?: string;
+  documentServerUrl?: string;
+  config?: Record<string, unknown>;
+}
+
 export interface FileAccessUrls {
   nodeId: string;
   version: number;

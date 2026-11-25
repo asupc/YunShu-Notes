@@ -2,6 +2,7 @@ import type {
   FileAccessUrls,
   ImportJobState,
   InlineOfficePreview,
+  OnlyOfficeConfigResponse,
   NodeFileVersion,
   NodeMeta,
   NodeType,
@@ -277,6 +278,9 @@ export const api = {
 
   getInlinePreview: (nodeId: string) =>
     request<InlineOfficePreview>(`/api/v1/nodes/${nodeId}/inline-preview`),
+
+  getOnlyOfficeConfig: (nodeId: string, theme: 'light' | 'dark' = 'light') =>
+    request<OnlyOfficeConfigResponse>(`/api/v1/nodes/${nodeId}/onlyoffice/config?theme=${theme}`),
 
   getVersions: (nodeId: string) =>
     request<{ versions: NodeFileVersion[] }>(`/api/v1/nodes/${nodeId}/versions`),

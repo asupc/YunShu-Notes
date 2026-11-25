@@ -14,4 +14,9 @@ export const config = {
   jwtSecret: process.env.JWT_SECRET ?? 'yunshu-dev-jwt-secret-change-me',
   // 注册入口默认关闭；需要新增账号时临时设为 true 并重启容器
   allowRegistration: process.env.ALLOW_REGISTRATION === 'true',
+  // ONLYOFFICE Docs 社区版配置（留空则关闭在线编辑，保留零依赖预览与本机 Office 唤起）
+  onlyofficeUrl: (process.env.ONLYOFFICE_URL ?? '').replace(/\/+$/, ''),
+  onlyofficeJwtSecret: process.env.ONLYOFFICE_JWT_SECRET ?? '',
+  // ONLYOFFICE 容器回调云树服务端的内网地址（Docker 同网可填 http://yunshu-server:3001）
+  onlyofficeInternalApiBase: (process.env.ONLYOFFICE_INTERNAL_API_BASE ?? '').replace(/\/+$/, ''),
 };

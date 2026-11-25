@@ -7,6 +7,7 @@ import { type AuthPayload, registerAuthRoutes } from './modules/auth';
 import { registerNodeRoutes } from './modules/nodes';
 import { registerFileRoutes } from './modules/files';
 import { registerMigrationRoutes } from './modules/migration';
+import { registerOnlyOfficeRoutes } from './modules/onlyoffice';
 import { startHocuspocusServer } from './ws/hocuspocus';
 
 async function bootstrap(): Promise<void> {
@@ -25,6 +26,7 @@ async function bootstrap(): Promise<void> {
   await registerNodeRoutes(app);
   await registerFileRoutes(app);
   await registerMigrationRoutes(app);
+  await registerOnlyOfficeRoutes(app);
 
   startHocuspocusServer((token) => {
     try {
