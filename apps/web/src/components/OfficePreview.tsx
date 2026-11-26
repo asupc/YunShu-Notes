@@ -157,6 +157,8 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
   const [onlyOfficeCfg, setOnlyOfficeCfg] = useState<OnlyOfficeConfigResponse | null>(null);
   const [onlyOfficeEditing, setOnlyOfficeEditing] = useState(false);
   const [onlyOfficeLoading, setOnlyOfficeLoading] = useState(false);
+  const [onlyOfficeWaking, setOnlyOfficeWaking] = useState(false);
+  const [onlyOfficeWakeHint, setOnlyOfficeWakeHint] = useState('');
   const [activeSheetIdx, setActiveSheetIdx] = useState(0);
   const [versions, setVersions] = useState<NodeFileVersion[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -168,10 +170,9 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
   // 否则 destroyEditor 与 React 卸载都会去删同一个节点，触发 removeChild 报错甚至整页崩溃。
   const ooContainerRef = useRef<HTMLDivElement | null>(null);
   // 打开文档时自动进入在线编辑；用户手动退出后，本次打开期间不再强制进入。
-  const autoOpenSkippedRef = useRef(false);
-  const lastNodeIdRef = useRef<string | null>(null);
   // 防止快速切换文档时，旧请求返回后覆盖新文档的状态/错误地自动打开旧文档。
   const fetchSeqRef = useRef(0);
+  const wakeSeqRef = useRef(0);
 
   const theme = useAppStore((s) => s.theme);
   const syncState = useAppStore((s) => s.officeSyncMap[node.id] ?? 'synced');
@@ -210,22 +211,12 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
       setVersions(verRes.versions);
       setOnlyOfficeCfg(ooRes);
 
-      // 打开文档即进入在线编辑（不再要求先点「在线编辑」）：
-      // 仅在当前这次打开尚未手动退出、且没有本机 Office 正在编辑时自动进入。
-      const autoEditing =
-        !autoOpenSkippedRef.current &&
-        Boolean(ooRes.enabled && ooRes.documentServerUrl && ooRes.config) &&
-        syncState !== 'editing_local';
-      if (autoEditing) {
-        setHistoryOpen(false);
-        setOnlyOfficeEditing(true);
-      }
-
+      // 文档默认以查看模式打开（零依赖预览 / PDF），不主动唤醒 ONLYOFFICE 容器；
+      // 仅当用户主动点击「在线编辑」时才按需唤醒并进入编辑态。
       const lower = urls.fileName.toLowerCase();
       const isExcel = lower.endsWith('.xlsx') || lower.endsWith('.xls');
       const isDocx = lower.endsWith('.docx');
-      // 已自动进入编辑器时不需要再拉取零依赖预览；用户手动退出后会重新拉取。
-      if (!autoEditing && (isExcel || (isDocx && !(urls.previewPdfUrl && urls.previewStatus === 'ready')))) {
+      if (isExcel || (isDocx && !(urls.previewPdfUrl && urls.previewStatus === 'ready'))) {
         try {
           const inline = await api.getInlinePreview(node.id);
           if (seq !== fetchSeqRef.current) return;
@@ -244,16 +235,27 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
   };
 
   useEffect(() => {
-    // 切换到另一个节点时重新允许自动进入编辑；同节点版本刷新则沿用当前用户选择。
-    if (lastNodeIdRef.current !== node.id) {
-      lastNodeIdRef.current = node.id;
-      autoOpenSkippedRef.current = false;
-    }
+    wakeSeqRef.current += 1;
     destroyOnlyOffice();
     setOnlyOfficeEditing(false);
+    setOnlyOfficeWaking(false);
+    setOnlyOfficeWakeHint('');
     void fetchAll();
-    return () => destroyOnlyOffice();
+    return () => {
+      wakeSeqRef.current += 1;
+      destroyOnlyOffice();
+    };
   }, [node.id, node.currentVersion]);
+
+  // 在线编辑期间每 60 秒上报一次心跳，防止编辑中途触发空闲自动休眠
+  useEffect(() => {
+    if (!onlyOfficeEditing) return;
+    void api.heartbeatOnlyOffice().catch(() => {});
+    const timer = window.setInterval(() => {
+      void api.heartbeatOnlyOffice().catch(() => {});
+    }, 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [onlyOfficeEditing]);
 
   // 挂载 ONLYOFFICE 编辑器实例
   useEffect(() => {
@@ -293,29 +295,68 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
   }, [onlyOfficeEditing, onlyOfficeCfg, showTip]);
 
   const handleToggleOnlyOffice = async () => {
-    if (onlyOfficeEditing) {
-      // 用户主动退出后，本次打开停留在预览，不再自动弹回编辑器。
-      autoOpenSkippedRef.current = true;
+    if (onlyOfficeEditing || onlyOfficeWaking) {
+      wakeSeqRef.current += 1;
       destroyOnlyOffice();
       setOnlyOfficeEditing(false);
-      // 退出后稍等回调落盘并刷新最新版本与预览
+      setOnlyOfficeWaking(false);
+      setOnlyOfficeWakeHint('');
+      // 退出编辑回到默认查看模式，稍等回调落盘后刷新最新版本与预览
       window.setTimeout(() => {
         void loadTree();
         void fetchAll();
       }, 600);
       return;
     }
+
+    const mySeq = ++wakeSeqRef.current;
     try {
-      const latestCfg = await api.getOnlyOfficeConfig(node.id, theme);
-      if (!latestCfg.enabled || !latestCfg.documentServerUrl || !latestCfg.config) {
-        showTip(latestCfg.reason || '服务端尚未配置 ONLYOFFICE_URL', 'error');
-        return;
-      }
-      setOnlyOfficeCfg(latestCfg);
       setHistoryOpen(false);
+      setOnlyOfficeWaking(true);
+      setOnlyOfficeWakeHint('正在检测 ONLYOFFICE 引擎状态...');
+
+      let status = await api.wakeOnlyOffice();
+      if (mySeq !== wakeSeqRef.current) return;
+      if (status.state === 'unavailable') {
+        throw new Error(status.message || 'ONLYOFFICE 服务暂不可用');
+      }
+
+      if (status.state !== 'ready') {
+        setOnlyOfficeWakeHint(
+          status.message ||
+            `正在按需唤醒 ONLYOFFICE 引擎（预计 20–40 秒），空闲 ${status.idleMinutes} 分钟后将自动休眠释放内存...`
+        );
+        const deadline = Date.now() + 120_000;
+        while (Date.now() < deadline) {
+          await new Promise((r) => window.setTimeout(r, 2000));
+          if (mySeq !== wakeSeqRef.current) return;
+          status = await api.getOnlyOfficeStatus();
+          if (mySeq !== wakeSeqRef.current) return;
+          if (status.state === 'ready') break;
+          if (status.state === 'unavailable') {
+            throw new Error(status.message || 'ONLYOFFICE 启动失败');
+          }
+        }
+        if (status.state !== 'ready') {
+          throw new Error('等待 ONLYOFFICE 启动超时，请稍后重试');
+        }
+      }
+
+      const latestCfg = await api.getOnlyOfficeConfig(node.id, theme);
+      if (mySeq !== wakeSeqRef.current) return;
+      if (!latestCfg.enabled || !latestCfg.documentServerUrl || !latestCfg.config) {
+        throw new Error(latestCfg.reason || '服务端尚未配置 ONLYOFFICE_URL');
+      }
+
+      setOnlyOfficeCfg(latestCfg);
+      setOnlyOfficeWaking(false);
+      setOnlyOfficeWakeHint('');
       setOnlyOfficeEditing(true);
     } catch (err) {
-      showTip(err instanceof Error ? err.message : '获取 ONLYOFFICE 配置失败', 'error');
+      if (mySeq !== wakeSeqRef.current) return;
+      setOnlyOfficeWaking(false);
+      setOnlyOfficeWakeHint('');
+      showTip(err instanceof Error ? err.message : '启动 ONLYOFFICE 在线编辑失败', 'error');
     }
   };
 
@@ -473,16 +514,16 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
               type="button"
               onClick={() => void handleToggleOnlyOffice()}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md text-white ${
-                onlyOfficeEditing
+                onlyOfficeEditing || onlyOfficeWaking
                   ? 'bg-slate-700 hover:bg-slate-800 dark:bg-neutral-800 dark:hover:bg-neutral-700'
                   : 'bg-emerald-600 hover:bg-emerald-700'
               }`}
               title={onlyOfficeEditing ? '退出在线编辑并刷新最新版本' : '使用 ONLYOFFICE Docs 在线编辑（Ctrl+S 自动保存新版本）'}
             >
-              {onlyOfficeEditing ? (
+              {onlyOfficeEditing || onlyOfficeWaking ? (
                 <>
                   <X className="w-3.5 h-3.5" />
-                  退出在线编辑
+                  {onlyOfficeWaking ? '取消唤醒' : '返回查看模式'}
                 </>
               ) : (
                 <>
@@ -493,7 +534,7 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
             </button>
           )}
 
-          {!onlyOfficeEditing && (
+          {!onlyOfficeEditing && !onlyOfficeWaking && (
             <>
               <button
                 type="button"
@@ -552,7 +593,19 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
           <div ref={ooContainerRef} className="w-full h-full" />
         </div>
 
-        {!onlyOfficeEditing && (
+        {onlyOfficeWaking && !onlyOfficeEditing && (
+          <div className="flex-1 flex flex-col items-center justify-center p-6 text-center bg-white dark:bg-black">
+            <RefreshCw className="w-7 h-7 text-emerald-600 dark:text-emerald-400 animate-spin mb-3" />
+            <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+              正在按需启动 ONLYOFFICE 在线编辑引擎...
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 max-w-md leading-relaxed">
+              {onlyOfficeWakeHint || '首次唤醒约需 20–40 秒，启动就绪后将自动打开编辑器。'}
+            </p>
+          </div>
+        )}
+
+        {!onlyOfficeEditing && !onlyOfficeWaking && (
           <div className="flex-1 min-w-0 bg-slate-100 dark:bg-black flex flex-col overflow-hidden">
             {loading ? (
               <div className="flex-1 flex items-center justify-center text-sm text-slate-500">
