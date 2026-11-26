@@ -3,6 +3,7 @@ import type {
   ImportJobState,
   InlineOfficePreview,
   OnlyOfficeConfigResponse,
+  OnlyOfficeStatusInfo,
   NodeFileVersion,
   NodeMeta,
   NodeType,
@@ -281,6 +282,20 @@ export const api = {
 
   getOnlyOfficeConfig: (nodeId: string, theme: 'light' | 'dark' = 'light') =>
     request<OnlyOfficeConfigResponse>(`/api/v1/nodes/${nodeId}/onlyoffice/config?theme=${theme}`),
+
+  getOnlyOfficeStatus: () => request<OnlyOfficeStatusInfo>('/api/v1/onlyoffice/status'),
+
+  wakeOnlyOffice: () =>
+    request<OnlyOfficeStatusInfo>('/api/v1/onlyoffice/wake', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+
+  heartbeatOnlyOffice: () =>
+    request<{ ok: boolean }>('/api/v1/onlyoffice/heartbeat', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
 
   getVersions: (nodeId: string) =>
     request<{ versions: NodeFileVersion[] }>(`/api/v1/nodes/${nodeId}/versions`),

@@ -5,6 +5,7 @@ import { db } from '../db';
 import { enqueuePreviewTask } from '../previewQueue';
 import { buildSignedDownloadUrl, writeStorageFile } from '../storage';
 import { requireAuth } from './auth';
+import { onlyofficeManager } from './onlyofficeManager';
 
 function base64UrlEncode(input: Buffer | string): string {
   return Buffer.from(input)
@@ -108,6 +109,33 @@ function resolveOnlyOfficeDocType(fileName: string): { fileType: string; documen
 }
 
 export async function registerOnlyOfficeRoutes(app: FastifyInstance): Promise<void> {
+  onlyofficeManager.setLogger({
+    info: (m) => app.log.info(m),
+    warn: (m) => app.log.warn(m),
+  });
+  onlyofficeManager.startIdleWatcher();
+
+  // 0. 查询 ONLYOFFICE 当前运行状态（不触发启动，用于文档查看模式）
+  app.get('/api/v1/onlyoffice/status', async (req, reply) => {
+    const auth = await requireAuth(req, reply);
+    if (!auth) return;
+    return await onlyofficeManager.getStatus();
+  });
+
+  // 0.1 按需唤醒 ONLYOFFICE 容器（仅在用户主动点击「在线编辑」时调用）
+  app.post('/api/v1/onlyoffice/wake', async (req, reply) => {
+    const auth = await requireAuth(req, reply);
+    if (!auth) return;
+    return await onlyofficeManager.wake();
+  });
+
+  // 0.2 在线编辑心跳续期（编辑期间每分钟上报，防止编辑中途被空闲休眠）
+  app.post('/api/v1/onlyoffice/heartbeat', async (req, reply) => {
+    const auth = await requireAuth(req, reply);
+    if (!auth) return;
+    onlyofficeManager.markActivity();
+    return { ok: true };
+  });
   // 1. 获取指定文档的 ONLYOFFICE 在线编辑配置（含 JWT 签名）
   app.get('/api/v1/nodes/:id/onlyoffice/config', async (req, reply) => {
     const auth = await requireAuth(req, reply);
@@ -202,6 +230,8 @@ export async function registerOnlyOfficeRoutes(app: FastifyInstance): Promise<vo
 
     return {
       enabled: true,
+      onDemand: config.onlyofficeOnDemand,
+      idleMinutes: config.onlyofficeIdleMinutes,
       documentServerUrl: config.onlyofficeUrl,
       config: editorConfig,
     };
@@ -248,6 +278,7 @@ export async function registerOnlyOfficeRoutes(app: FastifyInstance): Promise<vo
       }
     }
 
+    onlyofficeManager.markActivity();
     const status = Number(body.status ?? 0);
     const fileUrl = typeof body.url === 'string' ? body.url : '';
 

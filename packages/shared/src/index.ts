@@ -83,8 +83,20 @@ export type InlineOfficePreview =
   | { kind: 'docx'; fileName: string; html: string }
   | { kind: 'unsupported'; fileName: string; reason: string };
 
+export type OnlyOfficeRuntimeState = 'ready' | 'starting' | 'stopped' | 'unavailable';
+
+export interface OnlyOfficeStatusInfo {
+  enabled: boolean;
+  onDemand: boolean;
+  state: OnlyOfficeRuntimeState;
+  idleMinutes: number;
+  message?: string;
+}
+
 export interface OnlyOfficeConfigResponse {
   enabled: boolean;
+  onDemand?: boolean;
+  idleMinutes?: number;
   reason?: string;
   documentServerUrl?: string;
   config?: Record<string, unknown>;

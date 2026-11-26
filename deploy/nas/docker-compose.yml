@@ -18,6 +18,10 @@ services:
       ONLYOFFICE_URL: ${ONLYOFFICE_URL:-}
       ONLYOFFICE_JWT_SECRET: ${ONLYOFFICE_JWT_SECRET:-yunshu-onlyoffice-secret-change-me}
       ONLYOFFICE_INTERNAL_API_BASE: ${ONLYOFFICE_INTERNAL_API_BASE:-http://yunshu-server:3001}
+      ONLYOFFICE_ON_DEMAND: ${ONLYOFFICE_ON_DEMAND:-true}
+      ONLYOFFICE_CONTAINER_NAME: ${ONLYOFFICE_CONTAINER_NAME:-yunshu-onlyoffice}
+      ONLYOFFICE_HEALTH_URL: http://yunshu-onlyoffice:80/healthcheck
+      ONLYOFFICE_IDLE_MINUTES: ${ONLYOFFICE_IDLE_MINUTES:-15}
       # 保存回调里的 /cache/files 从 ONLYOFFICE 容器内网取，避免公网 NAT 回环
       ONLYOFFICE_INTERNAL_URL: ${ONLYOFFICE_INTERNAL_URL:-http://yunshu-onlyoffice}
       TZ: Asia/Shanghai
@@ -27,6 +31,8 @@ services:
       - "127.0.0.1:3002:3002"
     volumes:
       - ./data:/data
+      # 挂载 Docker Socket 以支持按需自动启停 yunshu-onlyoffice（空闲 0 内存）
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - docker_network
     healthcheck:
@@ -45,7 +51,8 @@ services:
   onlyoffice:
     image: onlyoffice/documentserver:latest
     container_name: yunshu-onlyoffice
-    restart: unless-stopped
+    # 按需启停模式设为 "no"，空闲自动休眠不占内存
+    restart: "no"
     environment:
       JWT_ENABLED: "true"
       # 必须与服务端 ONLYOFFICE_JWT_SECRET 完全一致（两者都取 .env 同一变量）
