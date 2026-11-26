@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Clock, Download, Edit3, ExternalLink, RefreshCw, RotateCcw, Upload, X } from 'lucide-react';
 import type {
   ExcelSheetPreview,
@@ -55,6 +56,8 @@ function loadOnlyOfficeSdk(documentServerUrl: string): Promise<void> {
 
 interface Props {
   node: NodeMeta;
+  headerMetaSlot?: HTMLDivElement | null;
+  headerActionsSlot?: HTMLDivElement | null;
 }
 
 function colIndexToLetter(idx: number): string {
@@ -151,7 +154,7 @@ const ExcelSheetTable: React.FC<{ sheet: ExcelSheetPreview }> = ({ sheet }) => {
   );
 };
 
-export const OfficePreview: React.FC<Props> = ({ node }) => {
+export const OfficePreview: React.FC<Props> = ({ node, headerMetaSlot, headerActionsSlot }) => {
   const [fileInfo, setFileInfo] = useState<FileAccessUrls | null>(null);
   const [inlinePreview, setInlinePreview] = useState<InlineOfficePreview | null>(null);
   const [onlyOfficeCfg, setOnlyOfficeCfg] = useState<OnlyOfficeConfigResponse | null>(null);
@@ -474,107 +477,124 @@ export const OfficePreview: React.FC<Props> = ({ node }) => {
         </div>
       )}
 
-      {/* 顶部操作工具栏 */}
-      <div className="px-4 py-2.5 border-b border-slate-200 dark:border-neutral-800 flex items-center justify-between gap-3 flex-wrap bg-white dark:bg-black">
-        <div className="flex items-center gap-2 min-w-0">
-          <h2 className="text-base font-bold truncate text-slate-900 dark:text-slate-100">{node.title}</h2>
-          {fileInfo && (
-            <span className="px-2 py-0.5 text-xs rounded bg-slate-100 dark:bg-neutral-900 text-slate-600 dark:text-slate-300 font-mono">
-              v{fileInfo.version}
-            </span>
-          )}
-          <span
-            className={`px-2 py-0.5 text-xs rounded-full font-medium ${
-              onlyOfficeEditing
-                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                : syncState === 'synced'
-                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                : syncState === 'editing_local'
-                ? 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
-                : syncState === 'uploading'
-                ? 'bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
-                : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'
-            }`}
-          >
-            {onlyOfficeEditing
-              ? '● ONLYOFFICE 在线编辑中'
-              : syncState === 'synced'
-              ? '● 已同步'
-              : syncState === 'editing_local'
-              ? '● 本机编辑中'
-              : syncState === 'uploading'
-              ? '● 自动回传中...'
-              : '● 需关注'}
-          </span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {onlyOfficeCfg?.enabled && (
-            <button
-              type="button"
-              onClick={() => void handleToggleOnlyOffice()}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md text-white ${
-                onlyOfficeEditing || onlyOfficeWaking
-                  ? 'bg-slate-700 hover:bg-slate-800 dark:bg-neutral-800 dark:hover:bg-neutral-700'
-                  : 'bg-emerald-600 hover:bg-emerald-700'
+      {/* 顶部元信息（版本号与同步状态）合并到全局顶栏文件名右侧，不再重复显示文件名 */}
+      {headerMetaSlot &&
+        createPortal(
+          <>
+            {fileInfo && (
+              <span className="px-1.5 py-0.5 text-[11px] rounded bg-slate-100 dark:bg-neutral-900 text-slate-600 dark:text-slate-300 font-mono">
+                v{fileInfo.version}
+              </span>
+            )}
+            <span
+              className={`hidden md:inline-flex px-2 py-0.5 text-[11px] rounded-full font-medium whitespace-nowrap ${
+                onlyOfficeEditing
+                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                  : syncState === 'synced'
+                  ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                  : syncState === 'editing_local'
+                  ? 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                  : syncState === 'uploading'
+                  ? 'bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+                  : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'
               }`}
-              title={onlyOfficeEditing ? '退出在线编辑并刷新最新版本' : '使用 ONLYOFFICE Docs 在线编辑（Ctrl+S 自动保存新版本）'}
             >
-              {onlyOfficeEditing || onlyOfficeWaking ? (
-                <>
-                  <X className="w-3.5 h-3.5" />
-                  {onlyOfficeWaking ? '取消唤醒' : '返回查看模式'}
-                </>
-              ) : (
-                <>
-                  <Edit3 className="w-3.5 h-3.5" />
-                  在线编辑
-                </>
-              )}
-            </button>
-          )}
+              {onlyOfficeEditing
+                ? '● 在线编辑中'
+                : syncState === 'synced'
+                ? '● 已同步'
+                : syncState === 'editing_local'
+                ? '● 本机编辑中'
+                : syncState === 'uploading'
+                ? '● 自动回传中...'
+                : '● 需关注'}
+            </span>
+          </>,
+          headerMetaSlot
+        )}
 
-          {!onlyOfficeEditing && !onlyOfficeWaking && (
-            <>
+      {/* 文档操作按钮统一移至全局顶栏「同步状态」左侧 */}
+      {headerActionsSlot &&
+        createPortal(
+          <>
+            {onlyOfficeCfg?.enabled && (
               <button
                 type="button"
-                onClick={handleOpenLocalOffice}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md bg-blue-600 hover:bg-blue-700 text-white"
+                onClick={() => void handleToggleOnlyOffice()}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded text-white whitespace-nowrap ${
+                  onlyOfficeEditing || onlyOfficeWaking
+                    ? 'bg-slate-700 hover:bg-slate-800 dark:bg-neutral-800 dark:hover:bg-neutral-700'
+                    : 'bg-emerald-600 hover:bg-emerald-700'
+                }`}
+                title={
+                  onlyOfficeEditing
+                    ? '退出在线编辑并返回查看模式'
+                    : '使用 ONLYOFFICE Docs 在线编辑（Ctrl+S 自动保存新版本）'
+                }
               >
-                <ExternalLink className="w-3.5 h-3.5" />
-                {isTauriRuntime() ? '用本机 Office 打开' : '下载并用本机打开'}
+                {onlyOfficeEditing || onlyOfficeWaking ? (
+                  <>
+                    <X className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">{onlyOfficeWaking ? '取消唤醒' : '返回查看'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">在线编辑</span>
+                  </>
+                )}
               </button>
+            )}
 
-              <button
-                type="button"
-                onClick={() => reuploadRef.current?.click()}
-                className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-900"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                上传新版
-              </button>
+            {!onlyOfficeEditing && !onlyOfficeWaking && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleOpenLocalOffice}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded bg-blue-600 hover:bg-blue-700 text-white whitespace-nowrap"
+                  title={isTauriRuntime() ? '用本机 Office 打开' : '下载并用本机打开'}
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">
+                    {isTauriRuntime() ? '用本机 Office 打开' : '下载并用本机打开'}
+                  </span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setHistoryOpen((v) => !v)}
-                className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-900"
-              >
-                <Clock className="w-3.5 h-3.5" />
-                版本历史（{versions.length}）
-              </button>
+                <button
+                  type="button"
+                  onClick={() => reuploadRef.current?.click()}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 text-slate-700 dark:text-slate-200 whitespace-nowrap"
+                  title="上传新版本"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span className="hidden lg:inline">上传新版</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => void fetchAll()}
-                className="p-1.5 rounded-md border border-slate-200 dark:border-neutral-800 hover:bg-slate-100 dark:hover:bg-neutral-900"
-                title="刷新预览"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-              </button>
-            </>
-          )}
-        </div>
-      </div>
+                <button
+                  type="button"
+                  onClick={() => setHistoryOpen((v) => !v)}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 text-slate-700 dark:text-slate-200 whitespace-nowrap"
+                  title={`版本历史（${versions.length}）`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span className="hidden lg:inline">版本历史（{versions.length}）</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void fetchAll()}
+                  className="p-1 rounded border border-slate-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 hover:bg-slate-100 dark:hover:bg-neutral-800 text-slate-700 dark:text-slate-200"
+                  title="刷新预览"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+              </>
+            )}
+
+            <div className="hidden sm:block h-4 w-px bg-slate-200 dark:bg-neutral-800 mx-0.5" />
+          </>,
+          headerActionsSlot
+        )}
 
       {/* 主体：ONLYOFFICE 在线编辑器 或 预览画布 + 右侧版本历史抽屉 */}
       <div className="flex-1 flex overflow-hidden min-h-0">

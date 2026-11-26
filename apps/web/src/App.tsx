@@ -95,6 +95,8 @@ export const App: React.FC = () => {
     return Number.isFinite(saved) && saved >= 180 && saved <= 640 ? saved : 268;
   });
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  const [headerMetaSlot, setHeaderMetaSlot] = useState<HTMLDivElement | null>(null);
+  const [headerActionsSlot, setHeaderActionsSlot] = useState<HTMLDivElement | null>(null);
 
   const resizingRef = useRef(false);
   const latestSidebarWidthRef = useRef(sidebarWidth);
@@ -276,9 +278,11 @@ export const App: React.FC = () => {
           ) : (
             isTauriRuntime() && <span className="text-xs text-slate-400">全部笔记</span>
           )}
+          <div ref={setHeaderMetaSlot} className="flex items-center gap-1.5 shrink-0" />
         </div>
 
-        <div className="flex items-center gap-2.5 shrink-0 text-xs">
+        <div className="flex items-center gap-2 shrink-0 text-xs">
+          <div ref={setHeaderActionsSlot} className="flex items-center gap-1.5 shrink-0" />
           {isOffline ? (
             <span
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 whitespace-nowrap"
@@ -375,7 +379,7 @@ export const App: React.FC = () => {
             ) : activeNode.nodeType === 'folder' ? (
               <FolderGridView folder={activeNode} />
             ) : isOfficeFile ? (
-              <OfficePreview node={activeNode} />
+              <OfficePreview node={activeNode} headerMetaSlot={headerMetaSlot} headerActionsSlot={headerActionsSlot} />
             ) : (
               <NoteEditor node={activeNode} />
             )}
