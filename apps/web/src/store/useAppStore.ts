@@ -99,6 +99,7 @@ interface AppState {
   sidebarOpen: boolean;
   mobileDrawerOpen: boolean;
   searchOpen: boolean;
+  trashOpen: boolean;
   officeSyncMap: Record<string, OfficeSyncState>;
   syncing: boolean;
   isOffline: boolean;
@@ -139,6 +140,7 @@ interface AppState {
   setSidebarOpen: (open: boolean) => void;
   setMobileDrawerOpen: (open: boolean) => void;
   setSearchOpen: (open: boolean) => void;
+  setTrashOpen: (open: boolean) => void;
   setOfficeSyncState: (nodeId: string, state: OfficeSyncState) => void;
   markSyncedNow: () => void;
 }
@@ -159,6 +161,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   sidebarOpen: true,
   mobileDrawerOpen: false,
   searchOpen: false,
+  trashOpen: false,
   officeSyncMap: {},
   syncing: false,
   isOffline: false,
@@ -690,6 +693,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
   setMobileDrawerOpen: (mobileDrawerOpen) => set({ mobileDrawerOpen }),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
+  setTrashOpen: (trashOpen) => set({ trashOpen }),
   setOfficeSyncState: (nodeId, state) =>
     set((s) => ({ officeSyncMap: { ...s.officeSyncMap, [nodeId]: state } })),
   markSyncedNow: () => set({ lastSyncedAt: new Date().toISOString(), syncError: null }),

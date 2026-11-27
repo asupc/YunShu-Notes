@@ -5,6 +5,7 @@ import { NoteEditor } from './components/NoteEditor';
 import { FolderGridView } from './components/FolderGridView';
 import { OfficePreview } from './components/OfficePreview';
 import { SearchModal } from './components/SearchModal';
+import { TrashDrawer } from './components/TrashDrawer';
 import { SidebarTree } from './components/SidebarTree';
 import { useLayoutMode } from './hooks/useLayoutMode';
 import { isTauriRuntime } from './lib/api';
@@ -388,6 +389,7 @@ export const App: React.FC = () => {
       </div>
 
       <SearchModal />
+      <TrashDrawer />
 
       {/* 全局底部统一 Tips 提示条 */}
       {statusTip && (

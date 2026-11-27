@@ -238,6 +238,22 @@ export const api = {
 
   deleteNode: (id: string) => request<{ ok: boolean }>(`/api/v1/nodes/${id}`, { method: 'DELETE' }),
 
+  restoreNode: (id: string) =>
+    request<{ ok: boolean; movedToRoot?: boolean }>(`/api/v1/nodes/${id}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+
+  permanentDeleteNode: (id: string) =>
+    request<{ ok: boolean; deletedCount: number }>(`/api/v1/nodes/${id}/permanent`, {
+      method: 'DELETE',
+    }),
+
+  emptyTrash: () =>
+    request<{ ok: boolean; deletedCount: number }>('/api/v1/trash', {
+      method: 'DELETE',
+    }),
+
   search: (q: string, types?: string[]) => {
     const params = new URLSearchParams({ q });
     if (types && types.length > 0) params.set('types', types.join(','));

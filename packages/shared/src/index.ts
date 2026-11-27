@@ -30,6 +30,7 @@ export interface NodeMeta {
   currentVersion: number;
   isPinned: boolean;
   isDeleted: boolean;
+  deletedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }

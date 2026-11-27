@@ -18,6 +18,7 @@ interface NodeRow {
   current_version: number;
   is_pinned: number;
   is_deleted: number;
+  deleted_at?: string | null;
   created_at: string;
   updated_at: string;
   content_html?: string;
@@ -38,6 +39,7 @@ function mapNode(row: NodeRow): NodeMeta {
     currentVersion: row.current_version,
     isPinned: Boolean(row.is_pinned),
     isDeleted: Boolean(row.is_deleted),
+    deletedAt: row.deleted_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -190,13 +192,14 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
     if (!auth) return;
     const { deleted } = req.query as { deleted?: string };
     const isDeleted = deleted === 'true' ? 1 : 0;
+    const orderSql = isDeleted ? 'ORDER BY deleted_at DESC, updated_at DESC' : 'ORDER BY rank ASC';
     const rows = db
       .prepare(
         `SELECT id, parent_id, path, rank, title, node_type, section, icon,
-                current_file_id, current_version, is_pinned, is_deleted, created_at, updated_at
+                current_file_id, current_version, is_pinned, is_deleted, deleted_at, created_at, updated_at
          FROM nodes
          WHERE user_id = ? AND is_deleted = ?
-         ORDER BY rank ASC`
+         ${orderSql}`
       )
       .all(auth.userId, isDeleted) as NodeRow[];
     return {
@@ -544,15 +547,70 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
     if (!auth) return;
     const { id } = req.params as { id: string };
     const cur = db
-      .prepare('SELECT path FROM nodes WHERE id = ? AND user_id = ?')
-      .get(id, auth.userId) as { path: string } | undefined;
+      .prepare('SELECT id, parent_id, path FROM nodes WHERE id = ? AND user_id = ?')
+      .get(id, auth.userId) as { id: string; parent_id: string | null; path: string } | undefined;
     if (!cur) return reply.code(404).send({ error: '节点不存在' });
 
-    db.prepare(
-      `UPDATE nodes SET is_deleted = 0, deleted_at = NULL, updated_at = datetime('now')
-       WHERE user_id = ? AND path LIKE ?`
-    ).run(auth.userId, `${cur.path}%`);
-    return { ok: true };
+    let movedToRoot = false;
+    db.transaction(() => {
+      let needMoveToRoot = false;
+      if (cur.parent_id) {
+        const parent = db
+          .prepare('SELECT is_deleted FROM nodes WHERE id = ? AND user_id = ?')
+          .get(cur.parent_id, auth.userId) as { is_deleted: number } | undefined;
+        if (!parent || parent.is_deleted === 1) {
+          needMoveToRoot = true;
+        }
+      }
+
+      if (needMoveToRoot) {
+        movedToRoot = true;
+        const newPrefix = `/root/${cur.id}/`;
+        const oldLen = cur.path.length;
+        db.prepare(
+          `UPDATE nodes
+           SET path = ? || substr(path, ?),
+               parent_id = CASE WHEN id = ? THEN NULL ELSE parent_id END,
+               is_deleted = 0,
+               deleted_at = NULL,
+               updated_at = datetime('now')
+           WHERE user_id = ? AND path LIKE ?`
+        ).run(newPrefix, oldLen + 1, cur.id, auth.userId, `${cur.path}%`);
+      } else {
+        db.prepare(
+          `UPDATE nodes SET is_deleted = 0, deleted_at = NULL, updated_at = datetime('now')
+           WHERE user_id = ? AND path LIKE ?`
+        ).run(auth.userId, `${cur.path}%`);
+      }
+    })();
+
+    return { ok: true, movedToRoot };
+  });
+
+  // 永久删除单个回收站节点及其子树
+  app.delete('/api/v1/nodes/:id/permanent', async (req, reply) => {
+    const auth = await requireAuth(req, reply);
+    if (!auth) return;
+    const { id } = req.params as { id: string };
+    const cur = db
+      .prepare('SELECT path FROM nodes WHERE id = ? AND user_id = ? AND is_deleted = 1')
+      .get(id, auth.userId) as { path: string } | undefined;
+    if (!cur) return reply.code(404).send({ error: '回收站中未找到该节点' });
+
+    const info = db
+      .prepare('DELETE FROM nodes WHERE user_id = ? AND is_deleted = 1 AND path LIKE ?')
+      .run(auth.userId, `${cur.path}%`);
+    return { ok: true, deletedCount: info.changes };
+  });
+
+  // 一键清空回收站
+  app.delete('/api/v1/trash', async (req, reply) => {
+    const auth = await requireAuth(req, reply);
+    if (!auth) return;
+    const info = db
+      .prepare('DELETE FROM nodes WHERE user_id = ? AND is_deleted = 1')
+      .run(auth.userId);
+    return { ok: true, deletedCount: info.changes };
   });
 
   // 全文检索（按路径切分精准查祖先面包屑，避免全表扫描）

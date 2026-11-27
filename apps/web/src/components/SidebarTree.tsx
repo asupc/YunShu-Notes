@@ -91,6 +91,7 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
   const loadTree = useAppStore((s) => s.loadTree);
   const setTheme = useAppStore((s) => s.setTheme);
   const setSearchOpen = useAppStore((s) => s.setSearchOpen);
+  const setTrashOpen = useAppStore((s) => s.setTrashOpen);
   const setUser = useAppStore((s) => s.setUser);
   const showTip = useAppStore((s) => s.showTip);
   const markOffline = useAppStore((s) => s.markOffline);
@@ -890,6 +891,14 @@ export const SidebarTree: React.FC<{ touchFriendly?: boolean }> = ({ touchFriend
         <span className="text-[11px] text-slate-400">右键管理 · 拖拽改目录</span>
 
         <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setTrashOpen(true)}
+            className="p-1.5 rounded hover:bg-slate-200/70 dark:hover:bg-neutral-900"
+            title="回收站"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
           <button
             type="button"
             onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
